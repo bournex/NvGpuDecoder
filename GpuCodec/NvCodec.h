@@ -475,12 +475,11 @@ namespace NvCodec
 					unsigned int readed = fread(cachedata, 1, cachelen, p);
 					decoder->InputStream(cachedata, readed);
 
-				}while(!feof(p));
-
-				eomf = true;
+				}while(!feof(p) || !eomf);
 
 				std::cout<<"end of source file"<<std::endl;
 			}
+			eomf = true;
 		}
 
 	private:
