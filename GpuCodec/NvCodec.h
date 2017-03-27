@@ -1,6 +1,9 @@
 #pragma once
 #include <boost/thread/mutex.hpp>
+#include <boost/thread.hpp>
+#include <boost/atomic.hpp>
 #include <nvcuvid.h>
+#include <string>
 #include <list>
 
 #include "FramePool.h"
@@ -21,19 +24,6 @@
 
 namespace NvCodec
 {
-	class NvMedia
-	{
-	public:
-		NvMedia()
-		{
-			FORMAT_INFO("in NvMedia");
-		}
-		~NvMedia()
-		{
-			FORMAT_INFO("in ~NvMedia");
-		}
-	};
-
 	class NvEncoder
 	{
 	public:
@@ -408,18 +398,30 @@ namespace NvCodec
 		}
 
 	private:
+		/**
+		 * Description: cuda objects
+		 */
 		CUcontext		cuCtx;		/* context handle */
 		CUvideoctxlock	cuCtxLock;	/* context lock */
 		CUvideoparser	cuParser;	/* video parser handle */
 		CUvideodecoder	cuDecoder;	/* video decoder handle */
 
-		unsigned int	cWidth;		/* current video resolution */
+		/**
+		 * Description: current video resolution
+		 */
+		unsigned int	cWidth;
 		unsigned int	cHeight;
 
+		/**
+		 * Description: decoded frames list
+		 */
 		boost::mutex				qmtx;
-		unsigned int				qlen;		/* cached decoded queue length */
-		std::list<CuFrame>			qpic;		/* cached decoded nv12 data */
+		unsigned int				qlen;		/* cached for decoded queue length */
+		std::list<CuFrame>			qpic;		/* cached for decoded nv12 data */
 
+		/**
+		 * Description: host memory management 
+		 */
 		bool			bMap2Host;
 		FramePool		framepool;
 	};
@@ -430,5 +432,62 @@ namespace NvCodec
 	{return ((NvDecoder*)p)->HandlePictureDecode(pPicParams);}
 	int CUDAAPI NvDecoder::HandlePictureDisplayProc(void *p, CUVIDPARSERDISPINFO *pDispInfo)
 	{return ((NvDecoder*)p)->HandlePictureDisplay(pDispInfo);}
+
+	/**
+	 * Description: definition of video source parsing
+	 */
+	class NvMediaSource
+	{
+	public:
+		NvMediaSource(std::string srcvideo, NvDecoder *decoder, unsigned int cachelen = 1024):eomf(false)
+		{
+			cachedata	= new unsigned char[cachelen];
+			BOOST_ASSERT(cachedata);
+
+			reader		= new boost::thread(boost::bind(&NvMediaSource::MediaReader, this, srcvideo, decoder));
+		}
+		~NvMediaSource()
+		{
+			if (reader->joinable())
+			{
+				reader->join();
+			}
+
+			if (cachedata)
+			{
+				delete []cachedata;			
+				cachedata	= NULL;
+			}
+		}
+
+		inline bool Eof()
+		{
+			return eomf;
+		}
+
+		void MediaReader(std::string filename, NvDecoder *decoder)
+		{
+			FILE * p = fopen(filename.c_str(), "rb");
+			if (p)
+			{
+				do
+				{
+					unsigned int readed = fread(cachedata, 1, cachelen, p);
+					decoder->InputStream(cachedata, readed);
+
+				}while(!feof(p));
+
+				eomf = true;
+
+				std::cout<<"end of source file"<<std::endl;
+			}
+		}
+
+	private:
+		boost::thread *		reader;
+		unsigned char *		cachedata;
+		unsigned int		cachelen;
+		boost::atomic_bool	eomf;
+	};
 
 }
