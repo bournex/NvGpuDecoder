@@ -16,19 +16,35 @@ int main(int argc, char **argv)
 		return 0;
 	}
 
+	/**
+	 * Description: create media source & decoder
+	 */
 	NvCodec::NvDecoder decoder;
 	NvCodec::NvDecoder::CuFrame frame;
-	NvCodec::NvMediaSource ms(argv[1], &decoder);
+	NvCodec::NvMediaSource media(argv[1], NULL, NULL, &decoder);
 
-	while (!ms.Eof() || decoder.GetFrame(frame))
+	// FILE *nv12 = fopen("D:\\out.yuv", "wb");
+
+	while (!media.Eof())
 	{
-		Sleep(5);
-		/**
-		 * Description: process the nv12 frame
-		 */
+		if (!decoder.GetFrame(frame))
+		{
+			Sleep(1);
+		}
+		else
+		{
+			/**
+			 * Description: process the nv12 frame
+			 */
+			//if (frame.host_frame)
+			//	fwrite(frame.host_frame, 1, frame.w * frame.h, nv12);
 
-		decoder.PutFrame(frame);
+			decoder.PutFrame(frame);
+		}
 	}
+
+	//?fclose(nv12);
+	//nv12 = NULL;
 
 	return 0;
 }

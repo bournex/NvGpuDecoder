@@ -43,7 +43,7 @@ namespace NvCodec
 		/**
 		* Description: 
 		*/
-		NvDecoder(unsigned int devidx = 0, unsigned int queuelen = 8, bool map2host = true)
+		NvDecoder(unsigned int devidx = 0, unsigned int queuelen = 4, bool map2host = true)
 			: cuCtx(NULL)
 			, cuCtxLock(NULL)
 			, cuParser(NULL)
@@ -84,7 +84,7 @@ namespace NvCodec
 			videoParserParameters.CodecType					= cudaVideoCodec_H264;
 			/* unknown */
 			videoParserParameters.ulMaxNumDecodeSurfaces	= (qlen<<1);
-			/* my sample only support h264 stream */
+			/* delay for 1 */
 			videoParserParameters.ulMaxDisplayDelay			= 1;
 			/* user data */
 			videoParserParameters.pUserData					= this;
@@ -135,12 +135,6 @@ namespace NvCodec
 			}
 		}
 
-		/**
-		* Description: global callbacks
-		*/
-		static int CUDAAPI HandleVideoSequenceProc(void *p, CUVIDEOFORMAT *pVideoFormat);
-		static int CUDAAPI HandlePictureDecodeProc(void *p, CUVIDPICPARAMS *pPicParams);
-		static int CUDAAPI HandlePictureDisplayProc(void *p, CUVIDPARSERDISPINFO *pDispInfo);
 
 		struct CuFrame
 		{
@@ -153,7 +147,7 @@ namespace NvCodec
 			unsigned long long	timestamp;
 
 			CuFrame(){}
-			CuFrame(unsigned int _w, unsigned int _h, unsigned int _pitch, CUdeviceptr &_f, unsigned long long _t)
+			CuFrame(unsigned int _w, unsigned int _h, unsigned int _pitch, CUdeviceptr _f, unsigned long long _t)
 			{
 				w			= _w;
 				h			= _h;
@@ -177,6 +171,7 @@ namespace NvCodec
 				if (!pStream || (nSize == 0))
 					packet.flags = CUVID_PKT_ENDOFSTREAM;
 
+				// std::cout<<"address "<<std::setbase(16)<<pStream<<", datalen "<<nSize<<std::endl;
 				if (ret = cuvidParseVideoData(cuParser, &packet))
 				{
 					FORMAT_FATAL("parse video data failed", ret);
@@ -209,10 +204,10 @@ namespace NvCodec
 				if (bMap2Host)
 				{
 					/**
-					* Description: alloc & copy to host
-				 */
+					 * Description: alloc & copy to host
+					 */
 					pic.host_pitch = CPU_WIDTH_ALIGN(pic.w);
-					pic.host_frame = framepool.Alloc(pic.host_pitch * pic.h);
+					pic.host_frame = framepool.Alloc(pic.dev_pitch * pic.h + ((pic.dev_pitch * pic.h)>>1));
 
 					assert(pic.host_frame);
 
@@ -221,8 +216,9 @@ namespace NvCodec
 					d2h.dstMemoryType	= CU_MEMORYTYPE_HOST;
 					d2h.srcDevice		= pic.dev_frame;
 					d2h.dstHost			= pic.host_frame;
+					d2h.dstDevice		= (CUdeviceptr)pic.host_frame;
 					d2h.srcPitch		= pic.dev_pitch;
-					d2h.dstPitch		= pic.host_pitch;
+					d2h.dstPitch		= pic.w;
 					d2h.WidthInBytes	= pic.w;
 					d2h.Height			= pic.h + (pic.h>>1);
 
@@ -254,23 +250,35 @@ namespace NvCodec
 				return false;
 			}
 
-			framepool.free(pic.host_frame);
+			if (pic.host_frame)
+			{
+				framepool.free(pic.host_frame);
+			}
+
 			memset(&pic, 0, sizeof(pic));
 
 			return true;
 		}
 
+		
+		/**
+		 * Description: global callbacks
+		 */
+		static int CUDAAPI HandleVideoSequenceProc(void *p, CUVIDEOFORMAT *pVideoFormat);
+		static int CUDAAPI HandlePictureDecodeProc(void *p, CUVIDPICPARAMS *pPicParams);
+		static int CUDAAPI HandlePictureDisplayProc(void *p, CUVIDPARSERDISPINFO *pDispInfo);
+
 	private:
 		/**
-		* Description: invoked when video source changed.
-		*/
+		 * Description: invoked when video source changed.
+		 */
 		int HandleVideoSequence(CUVIDEOFORMAT *pVideoFormat)
 		{
 			int ret = 0;
 
 			/**
-			* Description: video sequence change
-			*/
+			 * Description: video sequence change
+			 */
 			if (cuDecoder && (ret = cuvidDestroyDecoder(cuDecoder)))
 			{
 				FORMAT_WARNING("destroy decoder failed", ret);
@@ -299,7 +307,7 @@ namespace NvCodec
 			videoDecodeCreateInfo.ulTargetHeight		= cHeight	= pVideoFormat->coded_height;
 
 			/* inner decoded picture cache buffer */
-			videoDecodeCreateInfo.ulNumOutputSurfaces	= (qlen<<1);
+			videoDecodeCreateInfo.ulNumOutputSurfaces	= (qlen);
 
 			/* using dedicated video engines */
 			videoDecodeCreateInfo.ulCreationFlags		= cudaVideoCreate_PreferCUVID;
@@ -311,8 +319,8 @@ namespace NvCodec
 			videoDecodeCreateInfo.vidLock				= cuCtxLock;
 
 			/**
-			* Description: creating decoder
-			*/
+			 * Description: creating decoder
+			 */
 			if (ret = cuvidCreateDecoder(&cuDecoder, &videoDecodeCreateInfo))
 			{
 				/**
@@ -326,8 +334,8 @@ namespace NvCodec
 		}
 
 		/**
-		* Description: invoded when parsed stream data ready.
-		*/
+		 * Description: invoded when parsed stream data ready.
+		 */
 		int HandlePictureDecode(CUVIDPICPARAMS *pPicParams)
 		{
 			if (!cuDecoder)
@@ -346,8 +354,8 @@ namespace NvCodec
 		}
 
 		/**
-		* Description: invoked when Nv12 data is ready.
-		*/
+		 * Description: invoked when Nv12 data is ready.
+		 */
 		int HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo)
 		{
 			do 
@@ -385,7 +393,7 @@ namespace NvCodec
 			* Description: get decoded frame from inner queue
 			*/
 			int ret = 0;
-			if (ret = cuvidMapVideoFrame(cuDecoder, pDispInfo->picture_index, &pSrc,
+			while (ret = cuvidMapVideoFrame(cuDecoder, pDispInfo->picture_index, &pSrc,
 				&nPitch, &videoProcessingParameters))
 			{
 				FORMAT_WARNING("map decoded frame failed", ret);
@@ -393,6 +401,8 @@ namespace NvCodec
 
 			boost::mutex::scoped_lock(qmtx);
 			qpic.push_back(CuFrame(cWidth, cHeight, nPitch, pSrc, pDispInfo->timestamp));
+
+			std::cout<<"decoded enqueue : "<<pSrc<<std::endl;
 
 			return ret ? NV_FAILED : NV_OK;
 		}
@@ -439,12 +449,15 @@ namespace NvCodec
 	class NvMediaSource
 	{
 	public:
-		NvMediaSource(std::string srcvideo, NvDecoder *decoder, unsigned int cachelen = 1024):eomf(false)
+		typedef void (*MediaSrcDataCallback)(unsigned char *data, unsigned int len, void*p);
+
+		NvMediaSource(std::string srcvideo, MediaSrcDataCallback msdcb, void*user, NvDecoder *dec = NULL, unsigned int cachesize = 1024)
+			:eomf(false),datacb(msdcb),cbpointer(user),decoder(dec),cachelen(cachesize)
 		{
 			cachedata	= new unsigned char[cachelen];
 			BOOST_ASSERT(cachedata);
 
-			reader		= new boost::thread(boost::bind(&NvMediaSource::MediaReader, this, srcvideo, decoder));
+			reader		= new boost::thread(boost::bind(&NvMediaSource::MediaReader, this, srcvideo));
 		}
 		~NvMediaSource()
 		{
@@ -460,33 +473,52 @@ namespace NvCodec
 			}
 		}
 
-		inline bool Eof()
+		inline bool Eof(bool stop = false)
 		{
-			return eomf;
+			return (eomf = stop ? true : eomf);
 		}
 
-		void MediaReader(std::string filename, NvDecoder *decoder)
+		void MediaReader(std::string &filename)
 		{
-			FILE * p = fopen(filename.c_str(), "rb");
-			if (p)
+			FILE * p = NULL;
+			
+			if (p = fopen(filename.c_str(), "rb"))
 			{
 				do
 				{
 					unsigned int readed = fread(cachedata, 1, cachelen, p);
-					decoder->InputStream(cachedata, readed);
+
+					if (datacb)
+					{
+						/**
+						 * Description: callback to user
+						 */
+						datacb(cachedata, readed, cbpointer);
+					}
+
+					if (decoder)
+					{
+						/**
+						 * Description: input to decoder
+						 */
+						decoder->InputStream(cachedata, readed);
+					}
 
 				}while(!feof(p) || !eomf);
 
 				std::cout<<"end of source file"<<std::endl;
 			}
+
 			eomf = true;
 		}
 
 	private:
-		boost::thread *		reader;
-		unsigned char *		cachedata;
-		unsigned int		cachelen;
-		boost::atomic_bool	eomf;
+		boost::thread *			reader;
+		unsigned char *			cachedata;
+		unsigned int			cachelen;
+		NvDecoder *				decoder;
+		boost::atomic_bool		eomf;
+		void *					cbpointer;
+		NvMediaSource::MediaSrcDataCallback		datacb;
 	};
-
 }

@@ -1,5 +1,6 @@
 #pragma once
 
+
 #include <boost/thread/mutex.hpp>
 #include <boost/foreach.hpp>
 #include <algorithm>
@@ -12,8 +13,8 @@
 #define FORMAT_WARNING(log, ret)	FORMAT_OUTPUT("warning", log, ret)
 #define FORMAT_INFO(log)			FORMAT_OUTPUT("info", log, 0)
 
-const unsigned int PoolMax = 32768;
-const unsigned int PoolMin = 2;
+const unsigned int PoolMax = (1<<16);	/* 65536 */
+const unsigned int PoolMin = (1<<1);	/* 2 */
 
 #define BOUNDED_POOLSIZE(poolsize)	poolsize = \
 	(std::min(std::max(PoolMin, poolsize), PoolMax))
@@ -22,25 +23,16 @@ class FramePool
 {
 private:
 	/**
-	 * Description: max pool size
+	 * Description: pool size
 	 */
 	unsigned int poolsize;
 
-	struct FrameData
-	{
-		unsigned char * data;
-		unsigned int	len;
-
-		FrameData(unsigned char *_data, unsigned int _len):data(_data), len(_len){}
-	};
-
 	/**
-	 * Description: swap between two container
+	 * Description: swap buffers between two container
 	 */
 	std::map<unsigned int, unsigned char*> freelist;
 	std::map<unsigned char*, unsigned int> worklist;
 	boost::mutex	lmtx;
-
 
 public:
 	FramePool(unsigned int len = 8):poolsize(len)
@@ -67,7 +59,7 @@ public:
 			if (workbuf.first)
 			{
 				buf = workbuf.first;
-				delete buf;
+				free(buf);
 				buf = NULL;
 			}
 		}
@@ -78,11 +70,14 @@ public:
 			if (freebuf.second)
 			{
 				buf = freebuf.second;
-				delete buf;
+				free(buf);
 				buf = NULL;
 			}
 		}
 
+		/**
+		 * Description: cleanup buffer list
+		 */
 		worklist.clear();
 		freelist.clear();
 	}
@@ -93,37 +88,65 @@ public:
 		do 
 		{
 			boost::mutex::scoped_lock (lmtx);
-			if (worklist.size() < poolsize)
+
+			/**
+			 * Description: find proper buffer in freelist
+			 */
+			for (std::map<unsigned int, unsigned char*>::iterator it = freelist.begin();
+				it != freelist.end();
+				it ++)
 			{
 				/**
-				 * Description: find proper buffer in freelist
+				 * Description: find buffer in freelist
 				 */
-				for (std::map<unsigned int, unsigned char*>::iterator it = freelist.begin();
-					it != freelist.end();
-					it ++)
+				if (it->first >= len)
 				{
-					if (it->first >= len)
-					{
-						buf = it->second;
-						worklist.insert(std::pair<unsigned char*, unsigned int>(it->second, it->first));
-						freelist.erase(it);
+					buf = it->second;
+					worklist.insert(std::pair<unsigned char*, unsigned int>(it->second, it->first));
+					freelist.erase(it);
 
-						break;
+					break;
+				}
+			}
+
+			if (!buf)
+			{
+				if ((freelist.size() + worklist.size()) < poolsize)
+				{
+					/**
+					 * Description: no proper size buffer, alloc heap memory
+					 */
+					if (!buf)
+					{
+						buf = (unsigned char*)malloc(len);
+						worklist.insert(std::pair<unsigned char*, unsigned int>(buf, len));
 					}
 				}
-
-				/**
-				 * Description: no proper size buffer, alloc heap memory
-				 */
-				if (!buf)
+				else if (freelist.size())
 				{
-					buf = new unsigned char[len];
+					/**
+					 * Description: no suitable free buffer, realloc the biggest one
+					 */
+					std::map<unsigned int, unsigned char*>::reverse_iterator it = freelist.rbegin();
+					buf = it->second;
+					buf = (unsigned char*)realloc((unsigned char*)buf, len);
+
+					/**
+					 * Description: enqueue worklist, dequeue freelist
+					 */
 					worklist.insert(std::pair<unsigned char*, unsigned int>(buf, len));
+					freelist.erase(it.base());
+				}
+				else
+				{
+					/**
+					 * Description: worklist full, wait for next around,[TODO] reduce cpu usage
+					 */
 				}
 			}
 
 			/**
-			 * Description: try until get suitable buffer, [TODO] reduce cpu usage
+			 * Description: try until get suitable buffer
 			 */
 
 		} while (!buf);
@@ -150,6 +173,7 @@ public:
 			freelist.insert(std::pair<unsigned int, unsigned char*>(it->second, it->first));
 			worklist.erase(it);
 		}
+
 		return true;
 	}
 };

@@ -2,7 +2,7 @@
 <VisualStudioProject
 	ProjectType="Visual C++"
 	Version="9.00"
-	Name="GpuCodec"
+	Name="NvGpuCodec"
 	ProjectGUID="{F9DDC168-4439-4682-A9E6-0A8AEB5B3365}"
 	RootNamespace="GpuCodec"
 	Keyword="Win32Proj"
@@ -175,7 +175,7 @@
 			UniqueIdentifier="{4FC737F1-C7A5-4376-A066-2A32D752A2FF}"
 			>
 			<File
-				RelativePath=".\GpuCodec.cpp"
+				RelativePath=".\NvGpuCodec.cpp"
 				>
 			</File>
 			<File
