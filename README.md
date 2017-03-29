@@ -13,4 +13,6 @@ there're 3 classes in NvCodec.h
 - NvDecoder
 - NvMediaSource
 
-currently NvDecoder and NvMediaSource have implemented. you can rewrite this classes.
+Currently NvDecoder and NvMediaSource have implemented. you can rewrite this classes.
+
+sample have tested on Tesla M4/M40/K40 cards
