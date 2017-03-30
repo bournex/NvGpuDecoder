@@ -82,7 +82,7 @@ namespace NvCodec
 			CUVIDPARSERPARAMS videoParserParameters			= {  };
 			/* my sample only support h264 stream */
 			videoParserParameters.CodecType					= cudaVideoCodec_H264;
-			/* unknown */
+			/* stream cached length */
 			videoParserParameters.ulMaxNumDecodeSurfaces	= (qlen<<1);
 			/* delay for 1 */
 			videoParserParameters.ulMaxDisplayDelay			= 1;
@@ -324,8 +324,8 @@ namespace NvCodec
 			if (ret = cuvidCreateDecoder(&cuDecoder, &videoDecodeCreateInfo))
 			{
 				/**
-				* Description: create decoder failed
-			 */
+				 * Description: create decoder failed
+				 */
 				FORMAT_FATAL("create video decoder failed", ret);
 				cuDecoder = NULL;
 			}
@@ -454,7 +454,9 @@ namespace NvCodec
 		NvMediaSource(std::string srcvideo, MediaSrcDataCallback msdcb, void*user, NvDecoder *dec = NULL, unsigned int cachesize = 1024)
 			:eomf(false),datacb(msdcb),cbpointer(user),decoder(dec),cachelen(cachesize)
 		{
-			cachedata	= new unsigned char[cachelen];
+			BOOST_ASSERT(cachelen);
+
+			cachedata	= (unsigned char*)malloc(cachelen);
 			BOOST_ASSERT(cachedata);
 
 			reader		= new boost::thread(boost::bind(&NvMediaSource::MediaReader, this, srcvideo));
@@ -468,7 +470,7 @@ namespace NvCodec
 
 			if (cachedata)
 			{
-				delete []cachedata;			
+				free(cachedata);
 				cachedata	= NULL;
 			}
 		}
@@ -513,12 +515,12 @@ namespace NvCodec
 		}
 
 	private:
-		boost::thread *			reader;
-		unsigned char *			cachedata;
-		unsigned int			cachelen;
-		NvDecoder *				decoder;
-		boost::atomic_bool		eomf;
-		void *					cbpointer;
-		NvMediaSource::MediaSrcDataCallback		datacb;
+		boost::thread *			reader;					/* stream file reading thread handle */
+		unsigned char *			cachedata;				/* stream data cache buffer */
+		unsigned int			cachelen;				/* stream data cache buffer length */
+		NvDecoder *				decoder;				/* NvDecoder object */
+		boost::atomic_bool		eomf;					/* end of media flag */
+		void *					cbpointer;				/* user callback variable */
+		NvMediaSource::MediaSrcDataCallback		datacb;	/* user callback */
 	};
 }

@@ -131,6 +131,8 @@ public:
 					buf = it->second;
 					buf = (unsigned char*)realloc((unsigned char*)buf, len);
 
+					BOOST_ASSERT(buf);
+
 					/**
 					 * Description: enqueue worklist, dequeue freelist
 					 */
@@ -140,7 +142,7 @@ public:
 				else
 				{
 					/**
-					 * Description: worklist full, wait for next around,[TODO] reduce cpu usage
+					 * Description: worklist full, wait for next around,[TODO liuxf] reduce cpu usage
 					 */
 				}
 			}
