@@ -1,6 +1,5 @@
 #pragma once
 
-
 #include <boost/thread/mutex.hpp>
 #include <boost/foreach.hpp>
 #include <algorithm>
@@ -19,6 +18,83 @@ const unsigned int PoolMin = (1<<1);	/* 2 */
 #define BOUNDED_POOLSIZE(poolsize)	poolsize = \
 	(std::min(std::max(PoolMin, poolsize), PoolMax))
 
+class CpuAllocator
+{
+public:
+	static inline void * Malloc(unsigned int len)
+	{
+		BOOST_ASSERT(len);
+
+		return ::malloc(len);
+	}
+
+	static inline void * Realloc(void *p, unsigned int len)
+	{
+		BOOST_ASSERT(p);
+		BOOST_ASSERT(len);
+
+		return ::realloc(p, len);
+	}
+
+	static inline void	Free(void *p)
+	{
+		BOOST_ASSERT(p);
+
+		::free(p);
+	}
+};
+
+class GpuAllocator
+{
+public:
+	static inline void * Malloc(unsigned int len)
+	{
+		BOOST_ASSERT(len);
+
+		int ret = 0;
+		CUdeviceptr p;
+
+		if (ret = cuMemAlloc(&p, len))
+			FORMAT_FATAL("alloc device buffer failed", ret);
+
+		return (void*)p;
+	}
+
+	static inline void * Realloc(void *p, unsigned int len)
+	{
+		BOOST_ASSERT(p);
+		BOOST_ASSERT(len);
+
+		int ret = 0;
+		if (ret = cuMemFree((CUdeviceptr)p))
+		{
+			FORMAT_FATAL("free device buffer failed", ret);
+			return NULL;
+		}
+
+		p = NULL;
+		if (ret = cuMemAlloc((CUdeviceptr*)&p, len))
+		{
+			FORMAT_FATAL("re-alloc device buffer failed", ret);
+			return NULL;
+		}
+
+		return (void*)p;
+	}
+
+	static inline void	Free(void *p)
+	{
+		BOOST_ASSERT(p);
+
+		int ret = 0;
+		if (ret = cuMemFree((CUdeviceptr)p))
+		{
+			FORMAT_FATAL("free device buffer failed", ret);
+		}
+	}
+};
+
+template<class FrameAllocator = CpuAllocator>
 class FramePool
 {
 private:
@@ -59,7 +135,7 @@ public:
 			if (workbuf.first)
 			{
 				buf = workbuf.first;
-				free(buf);
+				FrameAllocator::Free(buf);
 				buf = NULL;
 			}
 		}
@@ -70,7 +146,7 @@ public:
 			if (freebuf.second)
 			{
 				buf = freebuf.second;
-				free(buf);
+				FrameAllocator::Free(buf);
 				buf = NULL;
 			}
 		}
@@ -118,7 +194,7 @@ public:
 					 */
 					if (!buf)
 					{
-						buf = (unsigned char*)malloc(len);
+						buf = (unsigned char*)FrameAllocator::Malloc(len);
 						worklist.insert(std::pair<unsigned char*, unsigned int>(buf, len));
 					}
 				}
@@ -129,7 +205,7 @@ public:
 					 */
 					std::map<unsigned int, unsigned char*>::reverse_iterator it = freelist.rbegin();
 					buf = it->second;
-					buf = (unsigned char*)realloc((unsigned char*)buf, len);
+					buf = (unsigned char*)FrameAllocator::Realloc((unsigned char*)buf, len);
 
 					BOOST_ASSERT(buf);
 
@@ -156,7 +232,7 @@ public:
 		return buf;
 	}
 
-	inline bool free(unsigned char* buf)
+	inline bool Free(unsigned char* buf)
 	{
 		boost::mutex::scoped_lock (lmtx);
 

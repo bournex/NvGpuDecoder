@@ -9,6 +9,7 @@
 #include "FramePool.h"
 
 #ifdef WIN32
+#define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
 #include <unistd.h>
@@ -252,7 +253,7 @@ namespace NvCodec
 
 			if (pic.host_frame)
 			{
-				framepool.free(pic.host_frame);
+				framepool.Free(pic.host_frame);
 			}
 
 			memset(&pic, 0, sizeof(pic));
@@ -433,7 +434,7 @@ namespace NvCodec
 		 * Description: host memory management 
 		 */
 		bool			bMap2Host;
-		FramePool		framepool;
+		FramePool<>		framepool;
 	};
 
 	int CUDAAPI NvDecoder::HandleVideoSequenceProc(void *p, CUVIDEOFORMAT *pVideoFormat)
