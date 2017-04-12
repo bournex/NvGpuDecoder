@@ -12,12 +12,17 @@
 #define FORMAT_WARNING(log, ret)	FORMAT_OUTPUT("warning", log, ret)
 #define FORMAT_INFO(log)			FORMAT_OUTPUT("info", log, 0)
 
+/* pool size bound definition */
 const unsigned int PoolMax = (1<<16);	/* 65536 */
 const unsigned int PoolMin = (1<<1);	/* 2 */
 
+/* calculate bounded pool size */
 #define BOUNDED_POOLSIZE(poolsize)	poolsize = \
 	(std::min(std::max(PoolMin, poolsize), PoolMax))
 
+/**
+ * Description: host RAM allocator
+ */
 class CpuAllocator
 {
 public:
@@ -44,6 +49,9 @@ public:
 	}
 };
 
+/**
+ * Description: nvidia device RAM allocator
+ */
 class GpuAllocator
 {
 public:

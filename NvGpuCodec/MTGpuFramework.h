@@ -14,19 +14,10 @@
 
 using namespace boost;
 
-
 extern bool Gpu_imageNV12Resize2BGR(
-	unsigned char** pSrc,
-	unsigned char** pCache,
-	unsigned char** pDst,
-	int nSrcWidth,
-	int nSrcHeight,
-	int nSrcPitchW,
-	int nSrcPitchH,
-	int nDstWidth,
-	int nDstHeight,
-	int nDstPitchW,
-	int nDstPitchH,
+	unsigned char** pSrc, unsigned char** pCache, unsigned char** pDst,
+	int nSrcWidth,	int nSrcHeight,	int nSrcPitchW,	int nSrcPitchH,
+	int nDstWidth,	int nDstHeight,	int nDstPitchW,	int nDstPitchH,
 	int nBatchSrc);
 
 class SmartPoolInterface
@@ -36,7 +27,6 @@ public:
 	virtual ISmartFrame * Get(unsigned int tid)				= 0;
 	virtual bool Get(unsigned int tid, unsigned char *&)	= 0;
 };
-
 
 class SmartFrame : public ISmartFrame
 {
@@ -107,16 +97,21 @@ public:
 		{
 			MultiBindBuf *mbp = it->second;
 
-			if (!(mbp->flag &= ~(1 << ((sf->Thumb() - mbp->bgr) / resolution_of_nv12))))
+			/**
+			 * Description: unbind current frame from batch block of bgrp
+			 */
+			if (!(mbp->flag &= ~(1 << ((sf->BGRP() - mbp->bgr) / resolution_of_nv12))))
 			{
 				/**
-				 * Description: all frames have unbind from batch block of bgrp
+				 * Description: all frames have unbound
 				 */
+				boost::mutex::scoped_lock(mtxlarge);
 				largepool.Free(mbp->bgr);
 				multi_bind_buf.erase(it);
 			}
 		}
 
+		boost::mutex::scoped_lock(mtx);
 		freefrms.push_back(sf);
 		busyfrms.erase(sf);
 
@@ -125,6 +120,7 @@ public:
 
 	inline ISmartFrame * Get(unsigned int tid/* who is acquiring frame */)
 	{
+		boost::mutex::scoped_lock(mtx);
 		ISmartFrame * sf = freefrms.back();
 		busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
 		freefrms.pop_back();
@@ -134,6 +130,7 @@ public:
 
 	inline bool Get(unsigned int batchsize, unsigned char *&bgrp)
 	{
+		boost::mutex::scoped_lock(mtxlarge);
 		bgrp = largepool.Alloc(batchsize * resolution_of_nv12 + ((batchsize * resolution_of_nv12) >> 1));
 
 		if (bgrp)
@@ -168,11 +165,13 @@ private:
 	unsigned int							resolution_of_nv12;
 	std::map<unsigned int, MultiBindBuf *>	multi_bind_buf;
 
+	boost::mutex							mtxlarge;
 	DevicePool								largepool;		/* VRAM pool for BGRP */
 
 	/**
 	 * Description: raw ISmartFrame object pool
 	 */
+	boost::mutex							mtx;
 	std::vector<ISmartFrame*>				freefrms;
 	std::map<ISmartFrame*, unsigned int>	busyfrms;	/* save thread tid which correspond with same decoder */
 };
@@ -255,6 +254,12 @@ public:
 			frame->width, frame->height, frame->stepGPU[0], tid);
 	}
 
+	inline int InputFrame(NvCodec::CuFrame &frame, unsigned int tid)
+	{
+		return InputFrame((unsigned char *)frame.dev_frame,
+			frame.w, frame.h, frame.dev_pitch, tid);
+	}
+
 	int InputFrame(unsigned char *imageGpu, unsigned int w, unsigned int h, unsigned int s, unsigned int tid)
 	{
 		/**
@@ -263,10 +268,10 @@ public:
 						if reach one batch is full, push batch
 		 */
 
-		ISmartFramePtr sfptr(sfpool->Get(tid));
+		ISmartFramePtr frame(sfpool->Get(tid));
 		static const unsigned int pipelen = batchsize * batchcnt;
 
-		if (!sfptr)
+		if (!frame)
 		{
 			/**
 			 * Description: no frame
@@ -278,11 +283,11 @@ public:
 			/**
 			 * Description: initialize smartframe
 			 */
-			static_cast<SmartFrame*>(sfptr.get())->origindata	= imageGpu;
-			static_cast<SmartFrame*>(sfptr.get())->frameno		= fidx++;
-			static_cast<SmartFrame*>(sfptr.get())->step			= s;
-			static_cast<SmartFrame*>(sfptr.get())->height		= h;
-			static_cast<SmartFrame*>(sfptr.get())->width		= w;
+			static_cast<SmartFrame*>(frame.get())->origindata	= imageGpu;
+			static_cast<SmartFrame*>(frame.get())->frameno		= fidx++;
+			static_cast<SmartFrame*>(frame.get())->step			= s;
+			static_cast<SmartFrame*>(frame.get())->height		= h;
+			static_cast<SmartFrame*>(frame.get())->width		= w;
 
 			/* comment shows when batchsize=12/batchcount=4 the pipe looks like */
 
@@ -307,7 +312,7 @@ public:
 						/**
 						 * Description: acquired time slice for batchpipe
 						 */
-						batchpipe[pipeidx++] = sfptr;
+						batchpipe[pipeidx++] = frame;
 						mtxpipe.unlock();
 						break;
 					}
@@ -527,6 +532,7 @@ private:
 	unsigned int						scaledheight;	/* scaled height */
 };
 
+thread_local unsigned int FrameBatchPipe::fidx(0);
 /**
  * Description: default temp pool size 4 [TODO]
  */

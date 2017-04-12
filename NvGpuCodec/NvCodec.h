@@ -7,6 +7,7 @@
 #include <list>
 
 #include "DedicatedPool.h"
+#include "NvCodecFrame.h"
 
 #ifdef WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -14,11 +15,6 @@
 #else
 #include <unistd.h>
 #endif
-
-#define GPU_WIDTH_ALIGN(w)	(((w + 511)>>9)<<9)
-#define CPU_WIDTH_ALIGN(w)	(((w + 3)>>2)<<2)
-#define GPU_BUF_CALC(w, h)	(((GPU_WIDTH_ALIGN(w) * h) * 3)>>1)
-#define CPU_BUF_CALC(w, h)	(((CPU_WIDTH_ALIGN(w) * h) * 3)>>1)
 
 #define NV_FAILED	0
 #define NV_OK		1
@@ -151,29 +147,6 @@ namespace NvCodec
 				throw ret;
 			}
 		}
-
-		struct CuFrame
-		{
-			unsigned int		w;
-			unsigned int		h;
-			unsigned int		dev_pitch;
-			CUdeviceptr			dev_frame;
-			unsigned int		host_pitch;		
-			unsigned char*		host_frame;
-			unsigned long long	timestamp;
-
-			CuFrame(){}
-			CuFrame(unsigned int _w, unsigned int _h, unsigned int _pitch, CUdeviceptr _f, unsigned long long _t)
-			{
-				w			= _w;
-				h			= _h;
-				dev_pitch	= _pitch;
-				dev_frame	= _f;
-				host_pitch	= CPU_WIDTH_ALIGN(_w);
-				host_frame	= NULL;
-				timestamp	= _t;
-			}
-		};
 
 		inline bool InputStream(unsigned char* pStream, unsigned int nSize)
 		{
@@ -558,7 +531,7 @@ namespace NvCodec
 		}
 
 	private:
-		boost::thread *			reader;					/* stream file reading thread handle */
+		boost::thread *						reader;		/* stream file reading thread handle */
 
 	protected:
 		boost::atomic_bool					eomf;		/* end of media flag */

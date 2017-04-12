@@ -2,7 +2,7 @@
 #include <boost/thread.hpp>
 #include "NpMediaSource.h"
 
-typedef void (*PlayWithFrame)(NvCodec::NvDecoder::CuFrame &frame, unsigned int tid);
+typedef void (*PlayWithFrame)(NvCodec::CuFrame &frame, unsigned int tid);
 
 class MtPlayGround
 {
@@ -21,7 +21,7 @@ public:
 		NvCodec::NvCodecInit();
 
 		Workers = new boost::thread *[len];
-		for (int i=0; i<len; i++)
+		for (unsigned int i=0; i<len; i++)
 		{
 			Workers[i] = new boost::thread(boost::bind(&MtPlayGround::Worker, this, srcvideos[i]));
 		}
@@ -73,7 +73,7 @@ public:
 			media.reset(new NvCodec::NpMediaSource(p.string(), &decoder));
 		}
 
-		NvCodec::NvDecoder::CuFrame frame;
+		NvCodec::CuFrame frame;
 
 		while (!eof && !media->Eof())
 		{

@@ -42,14 +42,14 @@ struct PCC_Frame
 class ISmartFrame
 {
 public:
-	virtual unsigned char*	Origin()	= 0;	/* get nv12 device data */
-	virtual unsigned char*	Thumb()		= 0;	/* get bgrp device data */
+	virtual unsigned char*	NV12()		= 0;	/* get nv12 device data */
+	virtual unsigned char*	BGRP()		= 0;	/* get bgrp device data */
 	virtual unsigned int	Width()		= 0;	/* get nv12 width */
 	virtual unsigned int	Height()	= 0;	/* get nv12 height */
 	virtual unsigned int	Step()		= 0;	/* get nv12 step */
-
-	virtual unsigned int	Pid()		= 0;	/* get which thread this frame belong to */
 	virtual unsigned int	FrameNo()	= 0;	/* get frame sequence number */
+
+	virtual unsigned int	Tid()		= 0;	/* get which thread this frame belong to */
 
 protected:
 	friend void intrusive_ptr_add_ref(ISmartFrame * sf) { sf->add_ref(sf); }
@@ -60,7 +60,17 @@ private:
 	virtual void release(ISmartFrame * sf) = 0;
 };
 
+/**
+ * Description: boost intrusive smart pointer defined SmartFrame. user should
+				always pass 'ISmartFramePtr' object rather than passing 
+				'ISmartFramePtr&'£¬'ISmartFramePtr *' or keep the raw pointer 
+				returned from 'get' method. the inner reference counter will 
+				increase 1 during object assignment copy construct, and decrease
+				1 during object destruct. the NV12, BGRP and SmartFrame object
+				will be destroy when reference counter decrease to 0.
+ */
 typedef boost::intrusive_ptr<ISmartFrame> ISmartFramePtr;
+
 /**
  * Description: parameter of p require thread safe implementation
  */
