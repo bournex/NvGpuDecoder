@@ -95,7 +95,7 @@ public:
 };
 
 template<class FrameAllocator = CpuAllocator>
-class FramePool
+class DedicatedPool
 {
 private:
 	/**
@@ -111,7 +111,7 @@ private:
 	boost::mutex	lmtx;
 
 public:
-	FramePool(unsigned int len = 8):poolsize(len)
+	explicit DedicatedPool(unsigned int len = 8):poolsize(len)
 	{
 		if (len > PoolMax || len < PoolMin)
 			FORMAT_WARNING("pool size is out of range [2, 32768]", len);
@@ -119,7 +119,7 @@ public:
 		BOUNDED_POOLSIZE(poolsize);
 	}
 
-	~FramePool()
+	~DedicatedPool()
 	{
 		typedef std::map<unsigned int, unsigned char*>::value_type FreeBuf;
 		typedef std::map<unsigned char*, unsigned int>::value_type WorkBuf;
@@ -255,3 +255,6 @@ public:
 		return true;
 	}
 };
+
+typedef DedicatedPool<CpuAllocator>		HostPool;
+typedef DedicatedPool<GpuAllocator>		DevicePool;

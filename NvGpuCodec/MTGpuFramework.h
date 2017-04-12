@@ -7,11 +7,13 @@
 #include <boost/thread/mutex.hpp>
 #include <boost/bind.hpp>
 #include <boost/asio.hpp>
-#include "FramePool.h"
+#include <boost/scoped_ptr.hpp>
+
+#include "DedicatedPool.h"
+#include "SmartFrame.h"
 
 using namespace boost;
 
-#define PCC_FRAME_MAX_CHAN	4
 
 extern bool Gpu_imageNV12Resize2BGR(
 	unsigned char** pSrc,
@@ -27,44 +29,40 @@ extern bool Gpu_imageNV12Resize2BGR(
 	int nDstPitchH,
 	int nBatchSrc);
 
-/**
-* Description:	Define the grid program supports image color space.
-*/
-typedef enum
+class SmartPoolInterface
 {
-	PCC_CS_GRAY = 0,
-	PCC_CS_RGB,
-	PCC_CS_BGR,
-	PCC_CS_YUV420P,
-	PCC_CS_YUV422P,
-	PCC_CS_RGBP,
-	PCC_CS_BGRP,
-} PCC_ColorSpace;
-
-/**
-* Description:	Define image type for cloud.
-* Members:		width:		Image width in pixels.
-*				height:		Image height in pixels.
-*				step:		The image step(stride) in bytes of each channel.
-*				timeStamp:	Time stamp for marking frame in video.
-*				imageData:	Image data pointer of each channel.
-*/
-
-struct PCC_Frame
-{
-	int			   width;
-	int			   height;
-	int			   step[PCC_FRAME_MAX_CHAN];
-	long long	   timeStamp;
-	PCC_ColorSpace colorSpace;
-	void *		   imageData[PCC_FRAME_MAX_CHAN];
-	int			   stepGPU[PCC_FRAME_MAX_CHAN];
-	void *		   imageGPU;
+public:
+	virtual int Put(ISmartFrame *sf)						= 0;
+	virtual ISmartFrame * Get(unsigned int tid)				= 0;
+	virtual bool Get(unsigned int tid, unsigned char *&)	= 0;
 };
 
 
-class GpuFrame
+class SmartFrame : public ISmartFrame
 {
+public:
+	explicit SmartFrame(SmartPoolInterface *fpool)
+		:refcnt(0), sfpool(fpool)
+	{
+		BOOST_ASSERT(sfpool);
+	}
+
+	inline void add_ref(ISmartFrame * sf)
+	{
+		SmartFrame *ptr = static_cast<SmartFrame*>(sf);
+		++ptr->refcnt;
+	}
+
+	inline void release(ISmartFrame * sf)
+	{
+		SmartFrame *ptr = static_cast<SmartFrame*>(sf);
+		if ((--ptr->refcnt == 0)
+			&& (ptr->sfpool))
+		{
+			ptr->sfpool->Put(sf);
+		}
+	}
+
 public:
 	unsigned char *			origindata;
 	unsigned char *			thumbdata;
@@ -72,39 +70,8 @@ public:
 	unsigned int			width;
 	unsigned int			step;
 	unsigned int			height;
-};
 
-class SmartFrame;
-typedef boost::intrusive_ptr<SmartFrame>	SmartFramePtr;
-
-class SmartPoolInterface
-{
-public:
-	virtual int Put(SmartFramePtr &sf) = 0;
-	virtual int Get(unsigned int tid, SmartFramePtr &sf) = 0;
-};
-
-class SmartFrame : public GpuFrame
-{
-public:
-	SmartFrame(SmartPoolInterface *fpool)
-		:refcnt(0), sfpool(fpool)
-	{
-		BOOST_ASSERT(sfpool);
-	}
-
-	friend void intrusive_ptr_add_ref(SmartFramePtr sf)
-	{
-		++sf->refcnt;
-	}
-
-	friend void intrusive_ptr_release(SmartFramePtr sf)
-	{
-		if (--sf->refcnt == 0 && sf->sfpool)
-		{
-			sf->sfpool->Put(sf);
-		}
-	}
+	unsigned int			batchidx;		/* identify batch sequence */
 
 private:
 	boost::atomic_uint32_t	refcnt;
@@ -117,8 +84,9 @@ private:
 class SmartFramePool : public SmartPoolInterface
 {
 public:
-	SmartFramePool(unsigned int poolsize = 8 * 8)
+	SmartFramePool(unsigned int nv12, unsigned int poolsize = 8 * 8):seq(0)
 	{
+		resolution_of_nv12 = nv12;
 		freefrms.resize(poolsize);
 	}
 
@@ -129,33 +97,89 @@ public:
 		 */
 	}
 
-	inline int Put(SmartFramePtr &sf)
+	inline int Put(ISmartFrame *sf)
 	{
+		/**
+		 * Description: remove bind to thumbnail buffer
+		 */
+		BindingPair it = multi_bind_buf.find(static_cast<SmartFrame*>(sf)->batchidx);
+		if (it != multi_bind_buf.end())
+		{
+			MultiBindBuf *mbp = it->second;
+
+			if (!(mbp->flag &= ~(1 << ((sf->Thumb() - mbp->bgr) / resolution_of_nv12))))
+			{
+				/**
+				 * Description: all frames have unbind from batch block of bgrp
+				 */
+				largepool.Free(mbp->bgr);
+				multi_bind_buf.erase(it);
+			}
+		}
+
 		freefrms.push_back(sf);
 		busyfrms.erase(sf);
 
 		return 0;
 	}
 
-	inline int Get(unsigned int tid/* who is acquiring frame */, SmartFramePtr &sf)
+	inline ISmartFrame * Get(unsigned int tid/* who is acquiring frame */)
 	{
-		sf = freefrms.back();
-		busyfrms.insert(std::pair<SmartFramePtr, unsigned int>(sf, tid));
+		ISmartFrame * sf = freefrms.back();
+		busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
 		freefrms.pop_back();
 
-		return 0;
+		return sf;
+	}
+
+	inline bool Get(unsigned int batchsize, unsigned char *&bgrp)
+	{
+		bgrp = largepool.Alloc(batchsize * resolution_of_nv12 + ((batchsize * resolution_of_nv12) >> 1));
+
+		if (bgrp)
+		{
+			multi_bind_buf.insert(std::pair<unsigned int, MultiBindBuf*>(
+				seq++,
+				new MultiBindBuf((1 << batchsize) - 1, bgrp)));
+		}
+		else
+		{
+			/* fatal */
+			largepool.Free(bgrp);
+			return false;
+		}
+
+		return true;
 	}
 
 private:
-	std::vector<SmartFramePtr>				freefrms;
-	std::map<SmartFramePtr, unsigned int>	busyfrms;	/* save thread tid, which correspond with same decoder */
+	struct MultiBindBuf { 
+		MultiBindBuf(unsigned int f, unsigned char* p):flag(f), bgr(p) {} 
+		unsigned int flag; 
+		unsigned char*bgr; 
+	};
+	typedef std::map<unsigned int, MultiBindBuf *>::iterator	BindingPair;
+
+	/**
+	 * Description: since thumb nv12 and bgrp is a large block corresponding with multi frames,
+					frame pool should not delete it until all address unbind from it.
+	 */
+	boost::atomic_uint32_t					seq;
+	unsigned int							resolution_of_nv12;
+	std::map<unsigned int, MultiBindBuf *>	multi_bind_buf;
+
+	DevicePool								largepool;		/* VRAM pool for BGRP */
+
+	/**
+	 * Description: raw ISmartFrame object pool
+	 */
+	std::vector<ISmartFrame*>				freefrms;
+	std::map<ISmartFrame*, unsigned int>	busyfrms;	/* save thread tid which correspond with same decoder */
 };
 
 /**
- * Description: parameter of p require thread safe implementation
+ * Description: thumbnail default resolution [TODO]
  */
-typedef void (*FrameBatchRoutine)(SmartFramePtr *p, unsigned int len, unsigned int tid, void * invoker);
-
 #define BOUNDARY_SIZE (640 * 320)
 
 class FrameBatchPipe
@@ -197,6 +221,25 @@ public:
 
 	~FrameBatchPipe()
 	{
+		if (deadline)
+		{
+			boost::system::error_code err;
+			deadline->cancel(err);
+
+			if (err)
+			{
+				/* error occur */
+			}
+
+			delete deadline;
+			deadline = NULL;
+		}
+
+		if (timerthread && timerthread->joinable())
+		{
+			timerthread->join();
+		}
+
 		if (sfpool)
 		{
 			delete sfpool;
@@ -206,7 +249,13 @@ public:
 		batchpipe.resize(0);
 	}
 	
-	int InputFrame(PCC_Frame *frame, unsigned int tid = 0)
+	inline int InputFrame(PCC_Frame *frame, unsigned int tid)
+	{
+		return InputFrame((unsigned char *)frame->imageGPU, 
+			frame->width, frame->height, frame->stepGPU[0], tid);
+	}
+
+	int InputFrame(unsigned char *imageGpu, unsigned int w, unsigned int h, unsigned int s, unsigned int tid)
 	{
 		/**
 		 * Description: convert PCC_Frame to SmartFrame
@@ -214,8 +263,7 @@ public:
 						if reach one batch is full, push batch
 		 */
 
-		SmartFramePtr sfptr;
-		sfpool->Get(tid, sfptr);
+		ISmartFramePtr sfptr(sfpool->Get(tid));
 		static const unsigned int pipelen = batchsize * batchcnt;
 
 		if (!sfptr)
@@ -230,11 +278,22 @@ public:
 			/**
 			 * Description: initialize smartframe
 			 */
-			sfptr->origindata	= (unsigned char *)frame->imageGPU;
-			sfptr->frameno		= fidx++;
-			sfptr->step			= frame->stepGPU[0];
-			sfptr->height		= frame->height;
-			sfptr->width		= frame->width;
+			static_cast<SmartFrame*>(sfptr.get())->origindata	= imageGpu;
+			static_cast<SmartFrame*>(sfptr.get())->frameno		= fidx++;
+			static_cast<SmartFrame*>(sfptr.get())->step			= s;
+			static_cast<SmartFrame*>(sfptr.get())->height		= h;
+			static_cast<SmartFrame*>(sfptr.get())->width		= w;
+
+			/* comment shows when batchsize=12/batchcount=4 the pipe looks like */
+
+			/*	  winidx 0	  winidx 1	   winidx 2	   winidx 3		*/
+			/*		  ¡ý												*/
+			/* +------------+-----------+------------+------------+ */
+			/* |############|###		|			 |			  | */
+			/* +------------+-----------+------------+------------+ */
+			/*		  ¡ý			¡ü									*/
+			/*		  ¡ý		pipeidx									*/
+			/*		push											*/
 
 			do 
 			{
@@ -258,8 +317,9 @@ public:
 				boost::this_thread::sleep(boost::posix_time::microsec(500));
 
 			} while (true);
-
+			
 			boost::mutex::scoped_lock(mtxpipe);
+
 			/**
 			 * Description: reach the edge
 			 */
@@ -271,9 +331,17 @@ public:
 				/**
 				 * Description: active window full
 				 */
-				if (fbcb)
+				FrameBatch fb;
+
+
+				if (fbcb && Prepare(&batchpipe[winidx * batchsize], batchsize, fb))
 				{
-					fbcb(&batchpipe[winidx * batchsize], batchsize, tid, invoker);
+					fbcb(&batchpipe[winidx * batchsize], batchsize, invoker);
+				}
+				else
+				{
+					FORMAT_FATAL("prepare batch data failed", 0);
+					return -1;
 				}
 
 				/**
@@ -284,7 +352,7 @@ public:
 			else
 			{
 				/**
-				 * Description: 
+				 * Description: writing active window, do nothing
 				 */
 			}
 		}
@@ -294,7 +362,11 @@ public:
 
 private:
 
+/**
+ * Description: adjust max frames to fit pipe size [TODO]
+ */
 #define MAX_FRAME 32
+
 	class FrameBatch
 	{
 	public:
@@ -302,35 +374,68 @@ private:
 		unsigned char *thumb[MAX_FRAME];
 	};
 
-	inline bool Prepare(SmartFramePtr *frames, unsigned int len, FrameBatch &fb)
+	class IntermediateNv12
 	{
+	private:
+		unsigned char *		nv12;
+		static DevicePool	smallpool;		/* VRAM pool for NV12 */
+
+	public:
+		IntermediateNv12(unsigned int size_of_nv12) : nv12(NULL)
+		{
+			BOOST_ASSERT(nv12 = smallpool.Alloc(size_of_nv12));
+		}
+
+		~IntermediateNv12()
+		{
+			if (nv12)
+			{
+				smallpool.Free(nv12);
+			}
+		}
+
+		inline unsigned char *Nv12() { return nv12; }
+	};
+	/**
+	 * Description: make sure calls to Prepare is thread safe
+	 */
+	bool Prepare(ISmartFramePtr *frames, unsigned int len, FrameBatch &fb)
+	{
+		/**
+		 * Description: thumbnail length
+		 */
 		unsigned int resolution_of_frame = scaledwidth * scaledheight;
 		unsigned int resolution_of_batch = resolution_of_frame * len;
 
 		/**
 		 * Description: alloc thumbnail buffer
 		 */
-		unsigned char * nv12 = smallpool.Alloc(resolution_of_batch);
-		unsigned char * bgrp = largepool.Alloc(resolution_of_batch + (resolution_of_batch>>1));
+		unsigned char * bgrp = NULL;
+		unsigned char * nv12 = NULL;
 		unsigned char * temp[MAX_FRAME] = { 0 };
 
-		for (int i = 0; i < len; i++)
-		{
-			fb.origin[i]	= frames[i]->origindata;
-			fb.thumb[i]		= (bgrp + i * (resolution_of_frame + (resolution_of_frame>>1)));
-			temp[i]			= (nv12 + i * resolution_of_frame);
-		}
+		IntermediateNv12 NV12(resolution_of_frame);
+		nv12 = NV12.Nv12();
 
-		if (Gpu_imageNV12Resize2BGR(
-			fb.origin, temp, fb.thumb,
-			frames[0]->width, frames[0]->height, frames[0]->step, frames[0]->height,
-			scaledwidth, scaledheight, scaledwidth,	scaledheight,
-			len))
+		if (!sfpool->Get(resolution_of_frame, bgrp))
 		{
+			/* fatal */
 			return false;
 		}
 
-		return true;
+		for (int i = 0; i < len; i++)
+		{
+			fb.origin[i]	= static_cast<SmartFrame*>(frames[i].get())->origindata;
+			fb.thumb[i]		= (bgrp + i * (resolution_of_frame + (resolution_of_frame>>1)));
+			temp[i]			= (nv12 + i * (resolution_of_frame));
+		}
+
+		/**
+		 * Description: convert nv12 to bgrp
+		 */
+		return Gpu_imageNV12Resize2BGR(fb.origin, temp, fb.thumb,
+			frames[0]->Width(), frames[0]->Height(), frames[0]->Step(), frames[0]->Height(),
+			scaledwidth, scaledheight, scaledwidth, scaledheight, len);
 	}
 
 	void TimerRoutine()
@@ -352,9 +457,56 @@ private:
 		deadline->expires_at(deadline->expires_at() + boost::posix_time::milliseconds(timeout));
 		deadline->async_wait(boost::bind(&FrameBatchPipe::PushPipeTimer, this));
 
+		static const unsigned int pipelen = batchsize * batchcnt;
+
 		/**
 		 * Description: do push
 		 */
+		boost::mutex::scoped_lock(mtxpipe);
+
+		FrameBatch fb;
+
+		if ((pipeidx < (winidx * batchsize)) ||				/* '<' out of batch lower bound */
+			(pipeidx >= (winidx * batchsize + batchsize)))	/* '>' out of batch upper bound, '=' end of batch */
+		{
+			/**
+			 * Description: active window full
+			 */
+			if (fbcb && Prepare(&batchpipe[winidx * batchsize], batchsize, fb))
+			{
+				fbcb(&batchpipe[winidx * batchsize], batchsize, invoker);
+			}
+			else
+			{
+				FORMAT_FATAL("prepare batch data failed", 0);
+			}
+		}
+		else
+		{
+			/**
+			 * Description: writing active window, force push this window, 
+							pipe index pointer move to next window
+			 */
+			unsigned int pos_in_win = (pipeidx - winidx * batchsize);
+			if (fbcb && Prepare(&batchpipe[winidx * batchsize], pos_in_win, fb))
+			{
+				fbcb(&batchpipe[winidx * batchsize], pos_in_win, invoker);
+			}
+			else
+			{
+				FORMAT_FATAL("prepare batch data failed", 0);
+			}
+
+			/**
+			 * Description: pipe index goto next window directly
+			 */
+			pipeidx = (((pipeidx + pos_in_win) == pipelen) ? 0 : (pipeidx + pos_in_win));
+		}
+
+		/**
+		 * Description: move to next window
+		 */
+		winidx = ((++winidx == batchcnt) ? 0 : winidx);
 	}
 
 private:
@@ -363,16 +515,19 @@ private:
 	unsigned int						timeout;		/* timeout interval */
 	static thread_local unsigned int	fidx;			/* current thread frame index */
 	boost::mutex						mtxpipe;		/* batch pipe mutex lock */
-	std::vector<SmartFramePtr>			batchpipe;		/* batches of SmartFrame */
+	std::vector<ISmartFramePtr>			batchpipe;		/* batches of SmartFrame */
 	unsigned int						pipeidx;		/* pipe writing index */
 	unsigned int						winidx;			/* pipe writing window index */
 	boost::thread *						timerthread;	/* timer thread */
 	boost::asio::deadline_timer *		deadline;		/* timer object */
-	SmartFramePool *					sfpool;			/* smart frame pool */
+	SmartPoolInterface *				sfpool;			/* smart frame pool */
 	FrameBatchRoutine					fbcb;			/* frame batch ready callback */
 	void *								invoker;		/* callback pointer */
 	unsigned int						scaledwidth;	/* scaled width */
 	unsigned int						scaledheight;	/* scaled height */
-	FramePool<GpuAllocator>				smallpool;		/* most for NV12 */
-	FramePool<GpuAllocator>				largepool;		/* most for BGRP */
 };
+
+/**
+ * Description: default temp pool size 4 [TODO]
+ */
+DevicePool FrameBatchPipe::IntermediateNv12::smallpool((unsigned int)4);

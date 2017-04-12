@@ -6,7 +6,7 @@
 #include <string>
 #include <list>
 
-#include "FramePool.h"
+#include "DedicatedPool.h"
 
 #ifdef WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -25,6 +25,28 @@
 
 namespace NvCodec
 {
+	/**
+	 * Description: this pair of function should be call before/after any NvCodec code
+	 */
+	int NvCodecInit()
+	{
+		int ret = 0;
+
+		if (ret = cuInit(0))
+		{
+			FORMAT_FATAL("create init environment failed", ret);
+			return ret;
+		}
+
+		return 0;
+	}
+
+	int NvCodecUninit()
+	{
+		/* nothing todo right now */
+		return 0;
+	}
+
 	class NvEncoder
 	{
 	public:
@@ -58,12 +80,6 @@ namespace NvCodec
 
 			if (!cuCtx)
 			{
-				if (ret = cuInit(0))
-				{
-					FORMAT_FATAL("create init environment failed", ret);
-					throw ret;
-				}
-
 				if (ret = cuCtxCreate(&cuCtx, 0, devidx))
 				{
 					FORMAT_FATAL("create context failed", ret);
@@ -135,7 +151,6 @@ namespace NvCodec
 				throw ret;
 			}
 		}
-
 
 		struct CuFrame
 		{
@@ -319,6 +334,11 @@ namespace NvCodec
 			/* context lock */
 			videoDecodeCreateInfo.vidLock				= cuCtxLock;
 
+			/* ulNumOutputSurfaces and ulNumDecodeSurfaces is the major param which will affect
+			VRAM usage, ulNumOutputSurfaces gives number of frames can map concurrently in display
+			callback, ulNumDecodeSurfaces represent nvidia decoder inner buffer upper bound. if
+			decoder is used in a VRAM limited condition, try to adjust the param above */
+
 			/**
 			 * Description: creating decoder
 			 */
@@ -433,8 +453,8 @@ namespace NvCodec
 		/**
 		 * Description: host memory management 
 		 */
-		bool			bMap2Host;
-		FramePool<>		framepool;
+		bool		bMap2Host;
+		HostPool	framepool;	/* RAM pool for frames */
 	};
 
 	int CUDAAPI NvDecoder::HandleVideoSequenceProc(void *p, CUVIDEOFORMAT *pVideoFormat)
@@ -445,46 +465,62 @@ namespace NvCodec
 	{return ((NvDecoder*)p)->HandlePictureDisplay(pDispInfo);}
 
 	/**
+	 * Description: media source callback definition
+	 */
+	typedef void(*MediaSrcDataCallback)(unsigned char *data, unsigned int len, void *p);
+
+	/**
 	 * Description: definition of video source parsing
 	 */
 	class NvMediaSource
 	{
 	public:
-		typedef void (*MediaSrcDataCallback)(unsigned char *data, unsigned int len, void*p);
+		typedef void(*MediaSrcDataCallback)(unsigned char *data, unsigned int len, void *p);
 
-		NvMediaSource(std::string srcvideo, MediaSrcDataCallback msdcb, void*user, NvDecoder *dec = NULL, unsigned int cachesize = 1024)
-			:eomf(false),datacb(msdcb),cbpointer(user),decoder(dec),cachelen(cachesize)
+		NvMediaSource(std::string srcvideo, MediaSrcDataCallback msdcb, void*user)
+			: eomf(false), datacb(msdcb), cbpointer(user), decoder(NULL)
 		{
-			BOOST_ASSERT(cachelen);
+			BOOST_ASSERT(msdcb);
 
-			cachedata	= (unsigned char*)malloc(cachelen);
-			BOOST_ASSERT(cachedata);
-
-			reader		= new boost::thread(boost::bind(&NvMediaSource::MediaReader, this, srcvideo));
+			reader = new boost::thread(boost::bind(&NvMediaSource::MediaReader, this, srcvideo));
 		}
+
+		NvMediaSource(std::string srcvideo, NvDecoder *dec)
+			: decoder(dec), datacb(NULL), cbpointer(NULL)
+		{
+			BOOST_ASSERT(dec);
+
+			reader = new boost::thread(boost::bind(&NvMediaSource::MediaReader, this, srcvideo));
+		}
+
 		~NvMediaSource()
 		{
-			if (reader->joinable())
+			this->Eof(true);
+
+			if (reader && reader->joinable())
 			{
 				reader->join();
-			}
-
-			if (cachedata)
-			{
-				free(cachedata);
-				cachedata	= NULL;
 			}
 		}
 
 		inline bool Eof(bool stop = false)
 		{
+			/* set or get */
 			return (eomf = stop ? true : eomf);
 		}
 
-		void MediaReader(std::string &filename)
+		virtual void MediaReader(std::string &filename)
 		{
-			FILE * p = NULL;
-			
+			/**
+			 * Description: raw h264 file media source reader implementation
+			 */
+			FILE *			p = NULL;
+			unsigned char * cachedata;	/* stream data cache buffer */
+			static const unsigned int cachelen = 1024;
+			cachedata = new unsigned char[cachelen];
+
+			BOOST_ASSERT(cachedata);
+
 			if (p = fopen(filename.c_str(), "rb"))
 			{
 				do
@@ -494,22 +530,28 @@ namespace NvCodec
 					if (datacb)
 					{
 						/**
-						 * Description: callback to user
-						 */
+						* Description: callback to user
+						*/
 						datacb(cachedata, readed, cbpointer);
 					}
 
 					if (decoder)
 					{
 						/**
-						 * Description: input to decoder
-						 */
+						* Description: input to decoder
+						*/
 						decoder->InputStream(cachedata, readed);
 					}
 
-				}while(!feof(p) || !eomf);
+				} while (!feof(p) || !eomf);
 
-				std::cout<<"end of source file"<<std::endl;
+				std::cout << "end of source file" << std::endl;
+			}
+
+			if (cachedata)
+			{
+				delete cachedata;
+				cachedata = NULL;
 			}
 
 			eomf = true;
@@ -517,11 +559,11 @@ namespace NvCodec
 
 	private:
 		boost::thread *			reader;					/* stream file reading thread handle */
-		unsigned char *			cachedata;				/* stream data cache buffer */
-		unsigned int			cachelen;				/* stream data cache buffer length */
-		NvDecoder *				decoder;				/* NvDecoder object */
-		boost::atomic_bool		eomf;					/* end of media flag */
-		void *					cbpointer;				/* user callback variable */
-		NvMediaSource::MediaSrcDataCallback		datacb;	/* user callback */
+
+	protected:
+		boost::atomic_bool					eomf;		/* end of media flag */
+		NvDecoder *							decoder;	/* NvDecoder object */
+		void *								cbpointer;	/* user callback variable */
+		NvMediaSource::MediaSrcDataCallback	datacb;		/* user callback */
 	};
 }
