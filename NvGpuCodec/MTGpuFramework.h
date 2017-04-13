@@ -105,7 +105,6 @@ public:
 				/**
 				 * Description: all frames have unbound
 				 */
-				boost::mutex::scoped_lock(mtxlarge);
 				largepool.Free(mbp->bgr);
 				multi_bind_buf.erase(it);
 			}
@@ -130,7 +129,6 @@ public:
 
 	inline bool Get(unsigned int batchsize, unsigned char *&bgrp)
 	{
-		boost::mutex::scoped_lock(mtxlarge);
 		bgrp = largepool.Alloc(batchsize * resolution_of_nv12 + ((batchsize * resolution_of_nv12) >> 1));
 
 		if (bgrp)
@@ -165,8 +163,7 @@ private:
 	unsigned int							resolution_of_nv12;
 	std::map<unsigned int, MultiBindBuf *>	multi_bind_buf;
 
-	boost::mutex							mtxlarge;
-	DevicePool								largepool;		/* VRAM pool for BGRP */
+	DevicePool								largepool;	/* VRAM pool for BGRP */
 
 	/**
 	 * Description: raw ISmartFrame object pool

@@ -9,11 +9,14 @@
 #include "MTGpuFramework.h"
 #include "MTPlayGround.h"
 
-/* multi thread or single thread */
-#define MULTITHREAD_FRAMEWORK
+/* pipeline simulation or only decoding */
+#define PIPELINE_SIMULATE_FRAMEWORK
 
 using namespace std;
 
+/**
+ * Description: pipeline simulation
+ */
 class BatchPipeline
 {
 private:
@@ -45,7 +48,7 @@ public:
 		pipeline	= new boost::thread *[procedure_count * procedure_threads];
 		for (int i = 0; i < procedure_count; i++)
 			for (int j = 0; j < procedure_threads; j++)
-				pipeline[i * j] = new boost::thread(boost::bind(&BatchPipeline::PipelineRoutine, this, i));
+				pipeline[procedure_threads * i + j] = new boost::thread(boost::bind(&BatchPipeline::PipelineRoutine, this, i));
 	}
 
 	~BatchPipeline()
@@ -76,6 +79,9 @@ public:
 
 	void EatBatch(ISmartFramePtr *batch, unsigned int len)
 	{
+		/**
+		 * Description: push to pipeline entry queue
+		 */
 		for (int i = 0; i < len; i++)
 			pipequeue[0].Push(batch[i]);
 	}
@@ -92,7 +98,7 @@ private:
 			 */
 			boost::this_thread::sleep(boost::posix_time::millisec(10));
 
-			if (pipeindex != procedure_count)
+			if ((pipeindex + 1) != procedure_count)
 			{
 				pipequeue[pipeindex + 1].Push(frame);
 			}
@@ -110,7 +116,7 @@ int main(int argc, char **argv)
 {
 	BOOST_ASSERT(argc > 1);
 
-#ifdef MULTITHREAD_FRAMEWORK
+#ifdef PIPELINE_SIMULATE_FRAMEWORK
 
 	auto decodeproc = [](NvCodec::CuFrame &frame, unsigned int tid) {
 		auto batchproc = [](ISmartFramePtr *batch, unsigned int len, void *invoker) {
@@ -135,7 +141,7 @@ int main(int argc, char **argv)
 	 */
 	NvCodec::NvCodecInit();
 	NvCodec::NvDecoder decoder;
-	NvCodec::NvDecoder::CuFrame frame;
+	NvCodec::CuFrame frame;
 	NvCodec::NvMediaSource media(argv[1], &decoder);
 
 	while (!media.Eof())

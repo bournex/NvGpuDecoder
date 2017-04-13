@@ -71,6 +71,7 @@ namespace NvCodec
 			, cHeight(0)
 			, qlen(queuelen)
 			, bMap2Host(map2host)
+			, qstrategy(QSWait)
 		{
 			int ret = 0;
 
@@ -198,7 +199,7 @@ namespace NvCodec
 					pic.host_pitch = CPU_WIDTH_ALIGN(pic.w);
 					pic.host_frame = framepool.Alloc(pic.dev_pitch * pic.h + ((pic.dev_pitch * pic.h)>>1));
 
-					assert(pic.host_frame);
+					BOOST_ASSERT(pic.host_frame);
 
 					CUDA_MEMCPY2D d2h	= { 0 };
 					d2h.srcMemoryType	= CU_MEMORYTYPE_DEVICE;
@@ -249,6 +250,12 @@ namespace NvCodec
 			return true;
 		}
 
+		inline int Strategy(int s = -1)
+		{
+			if (s == -1) return qstrategy;
+			BOOST_ASSERT((s >= QSWait) && (s < QSMax));
+			return (qstrategy = s);
+		}
 		
 		/**
 		 * Description: global callbacks
@@ -308,9 +315,9 @@ namespace NvCodec
 			videoDecodeCreateInfo.vidLock				= cuCtxLock;
 
 			/* ulNumOutputSurfaces and ulNumDecodeSurfaces is the major param which will affect
-			VRAM usage, ulNumOutputSurfaces gives number of frames can map concurrently in display
-			callback, ulNumDecodeSurfaces represent nvidia decoder inner buffer upper bound. if
-			decoder is used in a VRAM limited condition, try to adjust the param above */
+			VRAM usage, ulNumOutputSurfaces gives the number of frames can map concurrently in 
+			display	callback, ulNumDecodeSurfaces represent nvidia decoder inner buffer upper 
+			bound. if decoder is used in a VRAM limited condition, try to adjust the param above */
 
 			/**
 			 * Description: creating decoder
@@ -328,7 +335,7 @@ namespace NvCodec
 		}
 
 		/**
-		 * Description: invoded when parsed stream data ready.
+		 * Description: invoked when parsed stream data ready.
 		 */
 		int HandlePictureDecode(CUVIDPICPARAMS *pPicParams)
 		{
@@ -394,9 +401,17 @@ namespace NvCodec
 			}
 
 			boost::mutex::scoped_lock(qmtx);
-			qpic.push_back(CuFrame(cWidth, cHeight, nPitch, pSrc, pDispInfo->timestamp));
 
-			std::cout<<"decoded enqueue : "<<pSrc<<std::endl;
+			if (qpic.size() == qlen)
+			{ 
+				/* queue full */
+				if (QSPopEarlier == qstrategy)
+					qpic.pop_front();
+				else if (QSPopLatest == qstrategy)
+					qpic.pop_back();
+			}
+
+			qpic.push_back(CuFrame(cWidth, cHeight, nPitch, pSrc, pDispInfo->timestamp));
 
 			return ret ? NV_FAILED : NV_OK;
 		}
@@ -422,6 +437,15 @@ namespace NvCodec
 		boost::mutex				qmtx;
 		unsigned int				qlen;		/* cached for decoded queue length */
 		std::list<CuFrame>			qpic;		/* cached for decoded nv12 data */
+		boost::atomic_int32_t		qstrategy;	/* queue control strategy */
+
+		enum QueueStrategy
+		{
+			QSWait			= 0,	/* wait until queue has empty place */
+			QSPopEarlier	= 1,	/* pop the earlier one */
+			QSPopLatest		= 2,	/* pop the latest one */
+			QSMax
+		};
 
 		/**
 		 * Description: host memory management 
