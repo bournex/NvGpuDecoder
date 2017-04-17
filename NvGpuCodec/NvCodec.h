@@ -62,7 +62,7 @@ namespace NvCodec
 		/**
 		* Description: 
 		*/
-		NvDecoder(unsigned int devidx = 0, unsigned int queuelen = 4, bool map2host = true)
+		NvDecoder(unsigned int devidx = 0, unsigned int queuelen = 8, bool map2host = false)
 			: cuCtx(NULL)
 			, cuCtxLock(NULL)
 			, cuParser(NULL)
@@ -182,50 +182,56 @@ namespace NvCodec
 		/**
 		* Description: synchronous getting frames
 		*/
-		inline bool GetFrame(CuFrame &pic)
+		inline int GetFrame(CuFrame &pic)
 		{
-			boost::mutex::scoped_lock (qmtx);
-
-			if (qpic.size())
 			{
-				pic = qpic.front();
-				qpic.pop_front();
-
-				if (bMap2Host)
+				boost::mutex::scoped_lock(qmtx);
+				if (qpic.size())
 				{
-					/**
-					 * Description: alloc & copy to host
-					 */
-					pic.host_pitch = CPU_WIDTH_ALIGN(pic.w);
-					pic.host_frame = framepool.Alloc(pic.dev_pitch * pic.h + ((pic.dev_pitch * pic.h)>>1));
-
-					BOOST_ASSERT(pic.host_frame);
-
-					CUDA_MEMCPY2D d2h	= { 0 };
-					d2h.srcMemoryType	= CU_MEMORYTYPE_DEVICE;
-					d2h.dstMemoryType	= CU_MEMORYTYPE_HOST;
-					d2h.srcDevice		= pic.dev_frame;
-					d2h.dstHost			= pic.host_frame;
-					d2h.dstDevice		= (CUdeviceptr)pic.host_frame;
-					d2h.srcPitch		= pic.dev_pitch;
-					d2h.dstPitch		= pic.w;
-					d2h.WidthInBytes	= pic.w;
-					d2h.Height			= pic.h + (pic.h>>1);
-
-					int ret = 0;
-
-					cuvidCtxLock(cuCtxLock, 0);
-					if (ret = cuMemcpy2D(&d2h))
-					{
-						FORMAT_WARNING("copy to host failed", ret);
-					}
-					cuvidCtxUnlock(cuCtxLock, 0);
+					pic = qpic.front();
+					qpic.pop_front();
 				}
-
-				return true;
+				else
+				{
+					return -1;
+				}
 			}
 
-			return false;
+			if (bMap2Host)
+			{
+				/**
+				 * Description: alloc & copy to host
+				 */
+				pic.host_pitch = CPU_WIDTH_ALIGN(pic.w);
+				pic.host_frame = framepool.Alloc(pic.dev_pitch * pic.h + ((pic.dev_pitch * pic.h) >> 1));
+
+				BOOST_ASSERT(pic.host_frame);
+
+				CUDA_MEMCPY2D d2h = { 0 };
+				d2h.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+				d2h.dstMemoryType = CU_MEMORYTYPE_HOST;
+				d2h.srcDevice = pic.dev_frame;
+				d2h.dstHost = pic.host_frame;
+				d2h.dstDevice = (CUdeviceptr)pic.host_frame;
+				d2h.srcPitch = pic.dev_pitch;
+				d2h.dstPitch = pic.w;
+				d2h.WidthInBytes = pic.w;
+				d2h.Height = pic.h + (pic.h >> 1);
+
+				int ret = 0;
+
+				cuvidCtxLock(cuCtxLock, 0);
+				/**
+				 * Description: copy to host buffer safety
+				 */
+				if (ret = cuMemcpy2D(&d2h))
+				{
+					FORMAT_WARNING("copy to host failed", ret);
+				}
+				cuvidCtxUnlock(cuCtxLock, 0);
+			}
+
+			return 0;
 		}
 
 		inline bool PutFrame(CuFrame &pic)
@@ -359,27 +365,7 @@ namespace NvCodec
 		 */
 		int HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo)
 		{
-			do 
-			{
-				/**
-				* Description: ensure there's room for new picture
-			 */
-				unsigned int nlen = 0;
-				{
-					boost::mutex::scoped_lock(qmtx);
-					nlen = qpic.size();
-				}
-
-				if (nlen < qlen)
-					break;	/* free space */
-				else
-#ifdef WIN32
-					Sleep(50);
-#else
-					usleep(50*1000);
-#endif
-
-			} while (1);
+			FORMAT_DEBUG(__FUNCTION__, __LINE__, "video decoded");
 
 			CUVIDPROCPARAMS videoProcessingParameters	= { 0 };
 			videoProcessingParameters.progressive_frame = pDispInfo->progressive_frame;
@@ -397,20 +383,45 @@ namespace NvCodec
 			while (ret = cuvidMapVideoFrame(cuDecoder, pDispInfo->picture_index, &pSrc,
 				&nPitch, &videoProcessingParameters))
 			{
-				FORMAT_WARNING("map decoded frame failed", ret);
+
 			}
+
+			do
+			{
+				/**
+				 * Description: ensure there's room for new picture
+				 */
+
+				{
+					boost::mutex::scoped_lock(qmtx);
+					if (qpic.size() < qlen)
+						break;	/* have free space */
+					else if (qpic.size() == qlen)
+					{
+						/* queue full */
+						if (QSPopEarliest == qstrategy)
+						{
+							qpic.pop_front();
+							break;
+						}
+						else if (QSPopLatest == qstrategy)
+						{
+							/* unmap current frame */
+							cuvidUnmapVideoFrame(cuDecoder, pSrc);
+							return NV_OK;
+						}
+
+					}
+				}
+#ifdef WIN32
+				Sleep(20);
+#else
+				usleep(20 * 1000);
+#endif
+
+			} while (1);
 
 			boost::mutex::scoped_lock(qmtx);
-
-			if (qpic.size() == qlen)
-			{ 
-				/* queue full */
-				if (QSPopEarlier == qstrategy)
-					qpic.pop_front();
-				else if (QSPopLatest == qstrategy)
-					qpic.pop_back();
-			}
-
 			qpic.push_back(CuFrame(cWidth, cHeight, nPitch, pSrc, pDispInfo->timestamp));
 
 			return ret ? NV_FAILED : NV_OK;
@@ -442,7 +453,7 @@ namespace NvCodec
 		enum QueueStrategy
 		{
 			QSWait			= 0,	/* wait until queue has empty place */
-			QSPopEarlier	= 1,	/* pop the earlier one */
+			QSPopEarliest	= 1,	/* pop the earliest one */
 			QSPopLatest		= 2,	/* pop the latest one */
 			QSMax
 		};
@@ -492,7 +503,8 @@ namespace NvCodec
 
 		~NvMediaSource()
 		{
-			this->Eof(true);
+			FORMAT_DEBUG(__FUNCTION__, __LINE__, "video source destroyed");
+			eomf = true;
 
 			if (reader && reader->joinable())
 			{
@@ -500,10 +512,10 @@ namespace NvCodec
 			}
 		}
 
-		inline bool Eof(bool stop = false)
+		inline bool Eof()
 		{
 			/* set or get */
-			return (eomf = stop ? true : eomf);
+			return eomf.load();
 		}
 
 		virtual void MediaReader(std::string &filename)
@@ -530,6 +542,7 @@ namespace NvCodec
 						* Description: callback to user
 						*/
 						datacb(cachedata, readed, cbpointer);
+						FORMAT_DEBUG(__FUNCTION__, __LINE__, "in callback routine");
 					}
 
 					if (decoder)
@@ -540,9 +553,19 @@ namespace NvCodec
 						decoder->InputStream(cachedata, readed);
 					}
 
-				} while (!feof(p) || !eomf);
+				} while (!(feof(p)||eomf));
+
+				/**
+				 * Description: notify end of file
+				 */
+				if (datacb)		datacb(NULL, 0, cbpointer);
+				if (decoder)	decoder->InputStream(NULL, 0);
 
 				std::cout << "end of source file" << std::endl;
+			}
+			else
+			{
+				std::cout << "read source file failed" << std::endl;
 			}
 
 			if (cachedata)

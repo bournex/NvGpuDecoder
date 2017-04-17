@@ -18,12 +18,13 @@ public:
 		/**
 		 * Description: init nvidia environment
 		 */
+		BOOST_ASSERT(len > 0);
 		NvCodec::NvCodecInit();
 
 		Workers = new boost::thread *[len];
 		for (unsigned int i=0; i<len; i++)
 		{
-			Workers[i] = new boost::thread(boost::bind(&MtPlayGround::Worker, this, srcvideos[i]));
+			Workers[i] = new boost::thread(boost::bind(&MtPlayGround::Worker, this, boost::filesystem::path(srcvideos[i])));
 		}
 	}
 
@@ -58,24 +59,33 @@ public:
 		boost::scoped_ptr<NvCodec::NvMediaSource>	media(NULL);
 		unsigned int tid = GetCurrentThreadId();
 
-		if (p.extension() == "h264")
+		if (p.extension() == boost::filesystem::path(".h264"))
 		{
 			/**
 			 * Description: mbf file
 			 */
 			media.reset(new NvCodec::NvMediaSource(p.string(), &decoder));
 		}
-		else if (p.extension() == "mbf")
+		else if (p.extension() == boost::filesystem::path(".mbf"))
 		{
 			/**
 			 * Description: raw h264 file
 			 */
 			media.reset(new NvCodec::NpMediaSource(p.string(), &decoder));
 		}
+		else
+		{
+			/**
+			 * Description: unrecognized format
+			 */
+			return ;
+		}
 
 		NvCodec::CuFrame frame;
 
-		while (!eof && !media->Eof())
+		FORMAT_DEBUG(__FUNCTION__, __LINE__, "before get frame");
+		std::cout << std::boolalpha << eof << media->Eof() << std::endl;
+		while (!eof /*&& !media->Eof()*/)
 		{
 			if (!decoder.GetFrame(frame))
 			{
@@ -84,8 +94,8 @@ public:
 			else
 			{
 				/**
-				* Description: process the nv12 frame
-				*/
+				 * Description: process the nv12 frame
+				 */
 				if (playcb)
 				{
 					playcb(frame, tid);
@@ -94,5 +104,6 @@ public:
 				decoder.PutFrame(frame);
 			}
 		}
+		FORMAT_DEBUG(__FUNCTION__, __LINE__, "after get frame");
 	}
 };

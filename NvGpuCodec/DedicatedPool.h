@@ -11,6 +11,14 @@
 #define FORMAT_FATAL(log, ret)		FORMAT_OUTPUT("fatal", log, ret)
 #define FORMAT_WARNING(log, ret)	FORMAT_OUTPUT("warning", log, ret)
 #define FORMAT_INFO(log)			FORMAT_OUTPUT("info", log, 0)
+#define FORMAT_FUNCLINE				__FUNCTION__, __LINE__
+
+// #ifdef _DEBUG
+#define FORMAT_DEBUG(func, line, log) {char szdbg[1024] = {0};\
+	std::cout<<"[debug]["<<func<<"("<<line<<")"<<"] "<<log<<std::endl;}
+//#else
+//#define FORMAT_DEBUG(func, line, log)
+//#endif
 
 /* pool size bound definition */
 const unsigned int PoolMax = (1<<16);	/* 65536 */

@@ -14,11 +14,17 @@
 
 using namespace boost;
 
-extern bool Gpu_imageNV12Resize2BGR(
+bool Gpu_imageNV12Resize2BGR(
 	unsigned char** pSrc, unsigned char** pCache, unsigned char** pDst,
-	int nSrcWidth,	int nSrcHeight,	int nSrcPitchW,	int nSrcPitchH,
-	int nDstWidth,	int nDstHeight,	int nDstPitchW,	int nDstPitchH,
-	int nBatchSrc);
+	int nSrcWidth, int nSrcHeight, int nSrcPitchW, int nSrcPitchH,
+	int nDstWidth, int nDstHeight, int nDstPitchW, int nDstPitchH,
+	int nBatchSrc)
+{
+	/**
+	 * Description: do nothing
+	 */
+	return true;
+}
 
 class SmartPoolInterface
 {
@@ -191,6 +197,7 @@ public:
 					
 		:fbcb(fbroutine), invoker(invk), pipeidx(0), winidx(0), sfpool(0), scaledwidth(wscaled), scaledheight(hscaled)
 	{
+		FORMAT_DEBUG(__FUNCTION__, __LINE__, "constructing FrameBatchPipe");
 		BOOST_ASSERT(fbroutine);
 
 		batchsize	= batch_size;
@@ -273,6 +280,7 @@ public:
 			/**
 			 * Description: no frame
 			 */
+			FORMAT_DEBUG(__FUNCTION__, __LINE__, "get frame failed");
 			return -1;
 		}
 		else

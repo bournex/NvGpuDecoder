@@ -42,14 +42,15 @@ struct PCC_Frame
 class ISmartFrame
 {
 public:
-	virtual unsigned char*	NV12()		= 0;	/* get nv12 device data */
-	virtual unsigned char*	BGRP()		= 0;	/* get bgrp device data */
-	virtual unsigned int	Width()		= 0;	/* get nv12 width */
-	virtual unsigned int	Height()	= 0;	/* get nv12 height */
-	virtual unsigned int	Step()		= 0;	/* get nv12 step */
-	virtual unsigned int	FrameNo()	= 0;	/* get frame sequence number */
+	virtual unsigned char*	NV12()						= 0;	/* get nv12 device data, non-contiguous */
+	virtual unsigned char*	NV12s(bool base = false)	= 0;	/* get nv12 narrow data, contiguous */
+	virtual unsigned char*	BGRP(bool base = false)		= 0;	/* get bgrp narrow data, contiguous */
+	virtual unsigned int	Width()						= 0;	/* get nv12 width */
+	virtual unsigned int	Height()					= 0;	/* get nv12 height */
+	virtual unsigned int	Step()						= 0;	/* get nv12 step */
+	virtual unsigned int	FrameNo()					= 0;	/* get frame sequence number */
 
-	virtual unsigned int	Tid()		= 0;	/* get which thread this frame belong to */
+	virtual unsigned int	Tid()						= 0;	/* get which thread this frame belong to */
 
 protected:
 	friend void intrusive_ptr_add_ref(ISmartFrame * sf) { sf->add_ref(sf); }
@@ -65,13 +66,18 @@ private:
 				always pass 'ISmartFramePtr' object rather than passing 
 				'ISmartFramePtr&'£¬'ISmartFramePtr *' or keep the raw pointer 
 				returned from 'get' method. the inner reference counter will 
-				increase 1 during object assignment copy construct, and decrease
-				1 during object destruct. the NV12, BGRP and SmartFrame object
-				will be destroy when reference counter decrease to 0.
+				increase by 1 during object assignment copy construct, and 
+				decrease by 1 during object destruct. the NV12, BGRP and 
+				SmartFrame object will be destroyed when reference counter 
+				decrease to 0. the BGRP buffer in a single batch are continuous.
+				these are actually pointers with additional offset to the 
+				beginning of a large GPU buffer. and the large buffer won't 
+				destroy until all the ISmartFramePtrs linked to it been destroyed.
+				acquire the large buffer by calling Base() method.
  */
 typedef boost::intrusive_ptr<ISmartFrame> ISmartFramePtr;
 
 /**
- * Description: parameter of p require thread safe implementation
+ * Description: batch data callback function
  */
 typedef void(*FrameBatchRoutine)(ISmartFramePtr *p, unsigned int len, void * invoker);
