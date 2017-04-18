@@ -18,11 +18,18 @@ private:
 	class PipeQueue
 	{
 	private:
-		queue<ISmartFramePtr>	frames;
+		list<ISmartFramePtr>	frames;
 		boost::mutex			mtx;
 	public:
-		void Push(ISmartFramePtr frame) { boost::mutex::scoped_lock(mtx); frames.push(frame); }
-		ISmartFramePtr Pop() { boost::mutex::scoped_lock(mtx); ISmartFramePtr p = frames.front(); frames.pop(); return p; }
+		void Push(ISmartFramePtr frame) { boost::mutex::scoped_lock(mtx); frames.push_back(frame); }
+		ISmartFramePtr Pop() { 
+			boost::mutex::scoped_lock(mtx); 
+			if (0 == frames.size()) 
+				return NULL; 
+			ISmartFramePtr p = frames.front(); 
+			frames.pop_front(); 
+			return p; 
+		}
 	};
 
 	unsigned int					procedure_count;
@@ -85,6 +92,11 @@ private:
 		while (!eop)
 		{
 			ISmartFramePtr frame = pipequeue[pipeindex].Pop();
+			if (frame == NULL)
+			{
+				boost::this_thread::sleep(boost::posix_time::millisec(10));
+				continue;
+			}
 
 			/**
 			 * Description: do something

@@ -21,16 +21,15 @@ int main(int argc, char **argv)
 #ifdef PIPELINE_SIMULATE_FRAMEWORK
 
 	cout << "start up argument " << argc << endl;
+
 	auto decodeproc = [](NvCodec::CuFrame &frame, unsigned int tid) {
 		auto batchproc = [](ISmartFramePtr *batch, unsigned int len, void *invoker) {
 			static BatchPipeline bp;
-			bp.EatBatch(batch, len);
+			// bp.EatBatch(batch, len);
 		};
 		static FrameBatchPipe pipe(batchproc);
 		pipe.InputFrame(frame, tid);
 	};
-	// cout << __FUNCTION__ <<"("<<__LINE__<<") "<<"MtPlayGround construct" << endl;
-	FORMAT_DEBUG(__FUNCTION__, __LINE__, "MtPlayGround construct");
 	MtPlayGround mvs(&argv[1], argc - 1, decodeproc);
 
 	getchar();
@@ -54,7 +53,7 @@ int main(int argc, char **argv)
 	{
 		if (!decoder.GetFrame(frame))
 		{
-			Sleep(1);
+			boost::this_thread::sleep(boost::posix_time::milliseconds(1));
 		}
 		else
 		{

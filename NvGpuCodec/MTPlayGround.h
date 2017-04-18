@@ -87,9 +87,9 @@ public:
 		std::cout << std::boolalpha << eof << media->Eof() << std::endl;
 		while (!eof /*&& !media->Eof()*/)
 		{
-			if (!decoder.GetFrame(frame))
+			if (decoder.GetFrame(frame))
 			{
-				Sleep(1);
+				boost::this_thread::sleep(boost::posix_time::milliseconds(10));
 			}
 			else
 			{

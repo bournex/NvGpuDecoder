@@ -1,4 +1,6 @@
 #pragma once
+
+
 #include <boost/thread/mutex.hpp>
 #include <boost/thread.hpp>
 #include <boost/atomic.hpp>
@@ -365,7 +367,6 @@ namespace NvCodec
 		 */
 		int HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo)
 		{
-			FORMAT_DEBUG(__FUNCTION__, __LINE__, "video decoded");
 
 			CUVIDPROCPARAMS videoProcessingParameters	= { 0 };
 			videoProcessingParameters.progressive_frame = pDispInfo->progressive_frame;
@@ -413,11 +414,8 @@ namespace NvCodec
 
 					}
 				}
-#ifdef WIN32
-				Sleep(20);
-#else
-				usleep(20 * 1000);
-#endif
+
+				boost::this_thread::sleep(boost::posix_time::milliseconds(20));
 
 			} while (1);
 

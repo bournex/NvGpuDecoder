@@ -43,6 +43,39 @@ public:
 		BOOST_ASSERT(sfpool);
 	}
 
+	inline unsigned char* NV12()
+	{
+		return origindata;
+	}
+	inline unsigned char* NV12s(bool base = false)
+	{
+		return NULL;
+	}
+	inline unsigned char* BGRP(bool base = false)
+	{
+		return thumbdata;
+	}
+	inline unsigned int Width()
+	{
+		return width;
+	}
+	inline unsigned int Height()
+	{
+		return height;
+	}
+	inline unsigned int Step()
+	{
+		return step;
+	}
+	inline unsigned int FrameNo()
+	{
+		return frameno;
+	}
+	inline unsigned int Tid()
+	{
+		return 0;
+	}
+
 	inline void add_ref(ISmartFrame * sf)
 	{
 		SmartFrame *ptr = static_cast<SmartFrame*>(sf);
@@ -52,8 +85,7 @@ public:
 	inline void release(ISmartFrame * sf)
 	{
 		SmartFrame *ptr = static_cast<SmartFrame*>(sf);
-		if ((--ptr->refcnt == 0)
-			&& (ptr->sfpool))
+		if ((--ptr->refcnt == 1) && (ptr->sfpool))
 		{
 			ptr->sfpool->Put(sf);
 		}
@@ -127,6 +159,8 @@ public:
 	{
 		boost::mutex::scoped_lock(mtx);
 		ISmartFrame * sf = freefrms.back();
+		if (!sf)
+			sf = new SmartFrame(this);
 		busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
 		freefrms.pop_back();
 
@@ -209,17 +243,17 @@ public:
 		 */
 		batchpipe.resize(batchsize * batchcnt, NULL);
 
-		sfpool = new SmartFramePool(batchsize * batchcnt);
+		sfpool = new SmartFramePool(wscaled * hscaled, batchsize * batchcnt);
 		if (!sfpool)
 		{
 			throw("create smart frame pool failed");
 		}
 
-		timerthread = new boost::thread(boost::bind(&FrameBatchPipe::TimerRoutine, this));
-		if (!timerthread)
-		{
-			throw("create timer thread failed");
-		}
+		// timerthread = new boost::thread(boost::bind(&FrameBatchPipe::TimerRoutine, this));
+		// if (!timerthread)
+		//{
+		//	throw("create timer thread failed");
+		//}
 	}
 
 	~FrameBatchPipe()
@@ -333,7 +367,7 @@ public:
 			/**
 			 * Description: reach the edge
 			 */
-			pipeidx = ((++pipeidx == pipelen) ? 0 : pipeidx);
+			pipeidx = ((pipeidx == pipelen) ? 0 : pipeidx);
 
 			if ((pipeidx < (winidx * batchsize)) ||				/* '<' out of batch lower bound */
 				(pipeidx >= (winidx * batchsize + batchsize)))	/* '>' out of batch upper bound, '=' end of batch */
@@ -342,7 +376,6 @@ public:
 				 * Description: active window full
 				 */
 				FrameBatch fb;
-
 
 				if (fbcb && Prepare(&batchpipe[winidx * batchsize], batchsize, fb))
 				{
@@ -393,7 +426,8 @@ private:
 	public:
 		IntermediateNv12(unsigned int size_of_nv12) : nv12(NULL)
 		{
-			BOOST_ASSERT(nv12 = smallpool.Alloc(size_of_nv12));
+			nv12 = smallpool.Alloc(size_of_nv12);
+			BOOST_ASSERT(nv12);
 		}
 
 		~IntermediateNv12()
@@ -427,7 +461,7 @@ private:
 		IntermediateNv12 NV12(resolution_of_frame);
 		nv12 = NV12.Nv12();
 
-		if (!sfpool->Get(resolution_of_frame, bgrp))
+		if (!sfpool->Get(len, bgrp))
 		{
 			/* fatal */
 			return false;
@@ -523,7 +557,6 @@ private:
 	unsigned int						batchsize;		/* one batch size */
 	unsigned int						batchcnt;		/* batch count */
 	unsigned int						timeout;		/* timeout interval */
-	static thread_local unsigned int	fidx;			/* current thread frame index */
 	boost::mutex						mtxpipe;		/* batch pipe mutex lock */
 	std::vector<ISmartFramePtr>			batchpipe;		/* batches of SmartFrame */
 	unsigned int						pipeidx;		/* pipe writing index */
@@ -535,9 +568,20 @@ private:
 	void *								invoker;		/* callback pointer */
 	unsigned int						scaledwidth;	/* scaled width */
 	unsigned int						scaledheight;	/* scaled height */
+
+#if (__cplusplus >= 201103L)
+	static thread_local unsigned int			fidx;	/* current thread frame index */
+#else
+	static __declspec(thread) unsigned int		fidx;	/* current thread frame index */
+#endif
 };
 
+#if (__cplusplus >= 201103L)
 thread_local unsigned int FrameBatchPipe::fidx(0);
+#else
+unsigned int __declspec(thread) FrameBatchPipe::fidx(0);
+#endif
+
 /**
  * Description: default temp pool size 4 [TODO]
  */
