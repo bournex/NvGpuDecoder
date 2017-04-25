@@ -2,6 +2,7 @@
 
 #include <boost/thread.hpp>
 #include <boost/atomic.hpp>
+
 #include <queue>
 #include "SmartFrame.h"
 using namespace std;
@@ -23,9 +24,25 @@ private:
 	public:
 		void Push(ISmartFramePtr frame) { boost::mutex::scoped_lock(mtx); frames.push_back(frame); }
 		ISmartFramePtr Pop() { 
+
+			do 
+			{
+				unsigned int size = 0;
+				{
+					boost::mutex::scoped_lock(mtx);
+					size = frames.size();
+				}
+				if (size == 0)
+				{
+					boost::this_thread::sleep(boost::posix_time::microseconds(2000));
+				}
+				else
+				{
+					break;
+				}
+			} while (1);
+
 			boost::mutex::scoped_lock(mtx); 
-			if (0 == frames.size()) 
-				return NULL; 
 			ISmartFramePtr p = frames.front(); 
 			frames.pop_front(); 
 			return p; 
@@ -39,7 +56,7 @@ private:
 	boost::atomic_bool				eop;			/* end of procedure */
 
 public:
-	BatchPipeline(unsigned int procedure = 3, unsigned int worker = 2)
+	BatchPipeline(unsigned int procedure = 1, unsigned int worker = 1)
 		:procedure_count(procedure), procedure_threads(worker), eop(false)
 	{
 		pipequeue = new PipeQueue[procedure_count];
@@ -91,7 +108,7 @@ private:
 	{
 		while (!eop)
 		{
-			ISmartFramePtr frame = pipequeue[pipeindex].Pop();
+			ISmartFramePtr frame(pipequeue[pipeindex].Pop());
 			if (frame == NULL)
 			{
 				boost::this_thread::sleep(boost::posix_time::millisec(10));

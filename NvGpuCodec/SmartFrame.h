@@ -43,8 +43,6 @@ class ISmartFrame
 {
 public:
 	virtual unsigned char*	NV12()						= 0;	/* get nv12 device data, non-contiguous */
-	virtual unsigned char*	NV12s(bool base = false)	= 0;	/* get nv12 narrow data, contiguous */
-	virtual unsigned char*	BGRP(bool base = false)		= 0;	/* get bgrp narrow data, contiguous */
 	virtual unsigned int	Width()						= 0;	/* get nv12 width */
 	virtual unsigned int	Height()					= 0;	/* get nv12 height */
 	virtual unsigned int	Step()						= 0;	/* get nv12 step */
@@ -52,6 +50,7 @@ public:
 
 	virtual unsigned int	Tid()						= 0;	/* get which thread this frame belong to */
 
+	virtual ~ISmartFrame() {};
 protected:
 	friend void intrusive_ptr_add_ref(ISmartFrame * sf) { sf->add_ref(sf); }
 	friend void intrusive_ptr_release(ISmartFrame * sf) { sf->release(sf); }

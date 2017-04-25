@@ -8,30 +8,19 @@
 #include <boost/bind.hpp>
 #include <boost/asio.hpp>
 #include <boost/scoped_ptr.hpp>
+#include <algorithm>
 
 #include "DedicatedPool.h"
 #include "SmartFrame.h"
 
 using namespace boost;
 
-bool Gpu_imageNV12Resize2BGR(
-	unsigned char** pSrc, unsigned char** pCache, unsigned char** pDst,
-	int nSrcWidth, int nSrcHeight, int nSrcPitchW, int nSrcPitchH,
-	int nDstWidth, int nDstHeight, int nDstPitchW, int nDstPitchH,
-	int nBatchSrc)
-{
-	/**
-	 * Description: do nothing
-	 */
-	return true;
-}
-
 class SmartPoolInterface
 {
 public:
 	virtual int Put(ISmartFrame *sf)						= 0;
 	virtual ISmartFrame * Get(unsigned int tid)				= 0;
-	virtual bool Get(unsigned int tid, unsigned char *&)	= 0;
+	virtual ~SmartPoolInterface() {};
 };
 
 class SmartFrame : public ISmartFrame
@@ -43,17 +32,14 @@ public:
 		BOOST_ASSERT(sfpool);
 	}
 
+	~SmartFrame()
+	{
+
+	}
+
 	inline unsigned char* NV12()
 	{
 		return origindata;
-	}
-	inline unsigned char* NV12s(bool base = false)
-	{
-		return NULL;
-	}
-	inline unsigned char* BGRP(bool base = false)
-	{
-		return thumbdata;
 	}
 	inline unsigned int Width()
 	{
@@ -85,21 +71,20 @@ public:
 	inline void release(ISmartFrame * sf)
 	{
 		SmartFrame *ptr = static_cast<SmartFrame*>(sf);
-		if ((--ptr->refcnt == 1) && (ptr->sfpool))
+		if ((--ptr->refcnt == 0) && (ptr->sfpool))
 		{
 			ptr->sfpool->Put(sf);
 		}
 	}
 
 public:
-	unsigned char *			origindata;
-	unsigned char *			thumbdata;
-	unsigned int			frameno;
-	unsigned int			width;
-	unsigned int			step;
-	unsigned int			height;
+	unsigned char *					origindata;
+	volatile unsigned int			frameno;
+	volatile unsigned int			width;
+	volatile unsigned int			step;
+	volatile unsigned int			height;
 
-	unsigned int			batchidx;		/* identify batch sequence */
+	volatile unsigned int			batchidx;		/* identify batch sequence */
 
 private:
 	boost::atomic_uint32_t	refcnt;
@@ -112,10 +97,13 @@ private:
 class SmartFramePool : public SmartPoolInterface
 {
 public:
-	SmartFramePool(unsigned int nv12, unsigned int poolsize = 8 * 8):seq(0)
+	SmartFramePool(unsigned int nv12, unsigned int poolsize = 8 * 8):quit(false), totalsize(poolsize)
 	{
+		BOOST_ASSERT(totalsize > 0);
+
 		resolution_of_nv12 = nv12;
-		freefrms.resize(poolsize);
+		freefrms.resize(0);
+		busyfrms.clear();
 	}
 
 	~SmartFramePool()
@@ -123,6 +111,28 @@ public:
 		/**
 		 * Description: cleanup pool items
 		 */
+		quit = true;
+
+		do 
+		{
+			if (FreeSize())
+			{
+				boost::this_thread::sleep(boost::posix_time::microseconds(1000));
+			}
+			else
+			{
+				break;
+			}
+		} while (1);
+
+		typedef std::vector<ISmartFrame*>::iterator VITer;
+		for (VITer it = freefrms.begin(); it != freefrms.end(); it++)
+		{
+			ISmartFrame *p = *it;
+			delete p;
+			p = NULL;
+		}
+		freefrms.clear();
 	}
 
 	inline int Put(ISmartFrame *sf)
@@ -130,24 +140,6 @@ public:
 		/**
 		 * Description: remove bind to thumbnail buffer
 		 */
-		BindingPair it = multi_bind_buf.find(static_cast<SmartFrame*>(sf)->batchidx);
-		if (it != multi_bind_buf.end())
-		{
-			MultiBindBuf *mbp = it->second;
-
-			/**
-			 * Description: unbind current frame from batch block of bgrp
-			 */
-			if (!(mbp->flag &= ~(1 << ((sf->BGRP() - mbp->bgr) / resolution_of_nv12))))
-			{
-				/**
-				 * Description: all frames have unbound
-				 */
-				largepool.Free(mbp->bgr);
-				multi_bind_buf.erase(it);
-			}
-		}
-
 		boost::mutex::scoped_lock(mtx);
 		freefrms.push_back(sf);
 		busyfrms.erase(sf);
@@ -157,58 +149,53 @@ public:
 
 	inline ISmartFrame * Get(unsigned int tid/* who is acquiring frame */)
 	{
-		boost::mutex::scoped_lock(mtx);
-		ISmartFrame * sf = freefrms.back();
+		if (quit) return NULL;
+
+		ISmartFrame * sf = NULL;
+		while (!FreeSize())
+		{
+			if (BusySize() < totalsize)
+			{
+				sf = new SmartFrame(this);
+				busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
+				break;
+			}
+			boost::this_thread::sleep(boost::posix_time::microseconds(200));
+		}
+
 		if (!sf)
-			sf = new SmartFrame(this);
-		busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
-		freefrms.pop_back();
+		{
+			boost::mutex::scoped_lock(mtx);
+			sf = freefrms.back();
+			freefrms.pop_back();
+			busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
+		}
 
 		return sf;
 	}
 
-	inline bool Get(unsigned int batchsize, unsigned char *&bgrp)
+	inline unsigned int FreeSize()
 	{
-		bgrp = largepool.Alloc(batchsize * resolution_of_nv12 + ((batchsize * resolution_of_nv12) >> 1));
+		boost::mutex::scoped_lock(mtx);
+		return freefrms.size();
+	}
 
-		if (bgrp)
-		{
-			multi_bind_buf.insert(std::pair<unsigned int, MultiBindBuf*>(
-				seq++,
-				new MultiBindBuf((1 << batchsize) - 1, bgrp)));
-		}
-		else
-		{
-			/* fatal */
-			largepool.Free(bgrp);
-			return false;
-		}
-
-		return true;
+	inline unsigned int BusySize()
+	{
+		boost::mutex::scoped_lock(mtx);
+		return busyfrms.size();
 	}
 
 private:
-	struct MultiBindBuf { 
-		MultiBindBuf(unsigned int f, unsigned char* p):flag(f), bgr(p) {} 
-		unsigned int flag; 
-		unsigned char*bgr; 
-	};
-	typedef std::map<unsigned int, MultiBindBuf *>::iterator	BindingPair;
 
-	/**
-	 * Description: since thumb nv12 and bgrp is a large block corresponding with multi frames,
-					frame pool should not delete it until all address unbind from it.
-	 */
-	boost::atomic_uint32_t					seq;
+	boost::atomic_bool						quit;
 	unsigned int							resolution_of_nv12;
-	std::map<unsigned int, MultiBindBuf *>	multi_bind_buf;
-
-	DevicePool								largepool;	/* VRAM pool for BGRP */
 
 	/**
 	 * Description: raw ISmartFrame object pool
 	 */
 	boost::mutex							mtx;
+	unsigned int							totalsize;
 	std::vector<ISmartFrame*>				freefrms;
 	std::map<ISmartFrame*, unsigned int>	busyfrms;	/* save thread tid which correspond with same decoder */
 };
@@ -375,11 +362,18 @@ public:
 				/**
 				 * Description: active window full
 				 */
-				FrameBatch fb;
 
-				if (fbcb && Prepare(&batchpipe[winidx * batchsize], batchsize, fb))
+				if (fbcb)
 				{
-					fbcb(&batchpipe[winidx * batchsize], batchsize, invoker);
+					std::vector<ISmartFramePtr> batchdata;
+					batchdata.resize(batchsize);
+					std::swap_ranges(
+						batchpipe.begin() + (winidx * batchsize), 
+						batchpipe.begin() + (winidx * batchsize + batchsize), 
+						batchdata.begin());
+
+					fbcb(&batchdata[0], batchsize, invoker);
+					batchdata.clear();
 				}
 				else
 				{
@@ -404,83 +398,6 @@ public:
 	}
 
 private:
-
-/**
- * Description: adjust max frames to fit pipe size [TODO]
- */
-#define MAX_FRAME 32
-
-	class FrameBatch
-	{
-	public:
-		unsigned char *origin[MAX_FRAME];
-		unsigned char *thumb[MAX_FRAME];
-	};
-
-	class IntermediateNv12
-	{
-	private:
-		unsigned char *		nv12;
-		static DevicePool	smallpool;		/* VRAM pool for NV12 */
-
-	public:
-		IntermediateNv12(unsigned int size_of_nv12) : nv12(NULL)
-		{
-			nv12 = smallpool.Alloc(size_of_nv12);
-			BOOST_ASSERT(nv12);
-		}
-
-		~IntermediateNv12()
-		{
-			if (nv12)
-			{
-				smallpool.Free(nv12);
-			}
-		}
-
-		inline unsigned char *Nv12() { return nv12; }
-	};
-	/**
-	 * Description: make sure calls to Prepare is thread safe
-	 */
-	bool Prepare(ISmartFramePtr *frames, unsigned int len, FrameBatch &fb)
-	{
-		/**
-		 * Description: thumbnail length
-		 */
-		unsigned int resolution_of_frame = scaledwidth * scaledheight;
-		unsigned int resolution_of_batch = resolution_of_frame * len;
-
-		/**
-		 * Description: alloc thumbnail buffer
-		 */
-		unsigned char * bgrp = NULL;
-		unsigned char * nv12 = NULL;
-		unsigned char * temp[MAX_FRAME] = { 0 };
-
-		IntermediateNv12 NV12(resolution_of_frame);
-		nv12 = NV12.Nv12();
-
-		if (!sfpool->Get(len, bgrp))
-		{
-			/* fatal */
-			return false;
-		}
-
-		for (int i = 0; i < len; i++)
-		{
-			fb.origin[i]	= static_cast<SmartFrame*>(frames[i].get())->origindata;
-			fb.thumb[i]		= (bgrp + i * (resolution_of_frame + (resolution_of_frame>>1)));
-			temp[i]			= (nv12 + i * (resolution_of_frame));
-		}
-
-		/**
-		 * Description: convert nv12 to bgrp
-		 */
-		return Gpu_imageNV12Resize2BGR(fb.origin, temp, fb.thumb,
-			frames[0]->Width(), frames[0]->Height(), frames[0]->Step(), frames[0]->Height(),
-			scaledwidth, scaledheight, scaledwidth, scaledheight, len);
-	}
 
 	void TimerRoutine()
 	{
@@ -508,15 +425,13 @@ private:
 		 */
 		boost::mutex::scoped_lock(mtxpipe);
 
-		FrameBatch fb;
-
 		if ((pipeidx < (winidx * batchsize)) ||				/* '<' out of batch lower bound */
 			(pipeidx >= (winidx * batchsize + batchsize)))	/* '>' out of batch upper bound, '=' end of batch */
 		{
 			/**
 			 * Description: active window full
 			 */
-			if (fbcb && Prepare(&batchpipe[winidx * batchsize], batchsize, fb))
+			if (fbcb)
 			{
 				fbcb(&batchpipe[winidx * batchsize], batchsize, invoker);
 			}
@@ -532,7 +447,7 @@ private:
 							pipe index pointer move to next window
 			 */
 			unsigned int pos_in_win = (pipeidx - winidx * batchsize);
-			if (fbcb && Prepare(&batchpipe[winidx * batchsize], pos_in_win, fb))
+			if (fbcb)
 			{
 				fbcb(&batchpipe[winidx * batchsize], pos_in_win, invoker);
 			}
@@ -581,8 +496,3 @@ thread_local unsigned int FrameBatchPipe::fidx(0);
 #else
 unsigned int __declspec(thread) FrameBatchPipe::fidx(0);
 #endif
-
-/**
- * Description: default temp pool size 4 [TODO]
- */
-DevicePool FrameBatchPipe::IntermediateNv12::smallpool((unsigned int)4);

@@ -4,6 +4,7 @@
 #include <boost/filesystem.hpp>
 #include <boost/atomic.hpp>
 #include <iostream>
+#include <unordered_map>
 #include "NvCodec.h"
 #include "MTGpuFramework.h"
 #include "MTPlayGround.h"
@@ -15,7 +16,7 @@
 using namespace std;
 
 int main(int argc, char **argv)
-{
+{	
 	BOOST_ASSERT(argc > 1);
 
 #ifdef PIPELINE_SIMULATE_FRAMEWORK
@@ -25,7 +26,7 @@ int main(int argc, char **argv)
 	auto decodeproc = [](NvCodec::CuFrame &frame, unsigned int tid) {
 		auto batchproc = [](ISmartFramePtr *batch, unsigned int len, void *invoker) {
 			static BatchPipeline bp;
-			// bp.EatBatch(batch, len);
+			bp.EatBatch(batch, len);
 		};
 		static FrameBatchPipe pipe(batchproc);
 		pipe.InputFrame(frame, tid);
