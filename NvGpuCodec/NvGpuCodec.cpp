@@ -34,6 +34,7 @@ int main(int argc, char **argv)
 	MtPlayGround mvs(&argv[1], argc - 1, decodeproc);
 
 	getchar();
+
 #else
 
 	if (!argv[1] || !boost::filesystem::exists(boost::filesystem::path(argv[1])))

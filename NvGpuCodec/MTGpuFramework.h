@@ -97,12 +97,12 @@ private:
 class SmartFramePool : public SmartPoolInterface
 {
 public:
-	SmartFramePool(unsigned int nv12, unsigned int poolsize = 8 * 8):quit(false), totalsize(poolsize)
+	SmartFramePool(unsigned int nv12, unsigned int poolsize = 2 * 8):quit(false), totalsize(poolsize)
 	{
 		BOOST_ASSERT(totalsize > 0);
 
 		resolution_of_nv12 = nv12;
-		freefrms.resize(0);
+		freefrms.clear();
 		busyfrms.clear();
 	}
 
@@ -115,15 +115,11 @@ public:
 
 		do 
 		{
-			if (FreeSize())
-			{
-				boost::this_thread::sleep(boost::posix_time::microseconds(1000));
-			}
-			else
-			{
-				break;
-			}
-		} while (1);
+			/**
+			 * Description: wait for frames freed
+			 */
+			boost::this_thread::sleep(boost::posix_time::microseconds(1000));
+		} while (BusySize());
 
 		typedef std::vector<ISmartFrame*>::iterator VITer;
 		for (VITer it = freefrms.begin(); it != freefrms.end(); it++)
@@ -152,25 +148,43 @@ public:
 		if (quit) return NULL;
 
 		ISmartFrame * sf = NULL;
-		while (!FreeSize())
+
+		do 
 		{
-			if (BusySize() < totalsize)
 			{
-				sf = new SmartFrame(this);
-				busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
-				break;
+				/**
+				 * Description: acquire frame
+				 */
+				boost::mutex::scoped_lock(mtx);
+				if (freefrms.size())
+				{
+					/**
+					 * Description: have free frame
+					 */
+					sf = freefrms.back();
+					freefrms.pop_back();
+					busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
+					break;
+				}
+				else if ((freefrms.size() + busyfrms.size()) < totalsize)
+				{
+					/**
+					 * Description: frame lower than pool limit size, create new one
+					 */
+					sf = new SmartFrame(this);
+					busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
+					break;
+				}
 			}
+
+			/**
+			 * Description: wait for free frame
+			 */
 			boost::this_thread::sleep(boost::posix_time::microseconds(200));
-		}
 
-		if (!sf)
-		{
-			boost::mutex::scoped_lock(mtx);
-			sf = freefrms.back();
-			freefrms.pop_back();
-			busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
-		}
-
+		} while (!sf);
+		static boost::atomic_uint32_t idx(0);
+		++idx;
 		return sf;
 	}
 
@@ -211,7 +225,7 @@ public:
 	FrameBatchPipe(	FrameBatchRoutine	fbroutine			/* frame batch ready callback */,
 					void *				invk		= 0		/* invoker pointer */,
 					unsigned int		batch_size	= 8		/* batch init size, equal to or more than threads */,
-					unsigned int		batch_cnt	= 8		/* batch init count, equal to or less than decode queue len */,
+					unsigned int		batch_cnt	= 2		/* batch init count, equal to or less than decode queue len */,
 					unsigned int		time_out	= 40	/* millisecond */, 
 					unsigned int		wscaled		= 640	/* width scaled resolution */,
 					unsigned int		hscaled		= 320	/* height scaled resolution */)
@@ -322,9 +336,9 @@ public:
 			/* +------------+-----------+------------+------------+ */
 			/* |############|###		|			 |			  | */
 			/* +------------+-----------+------------+------------+ */
-			/*		  ¡ý			¡ü									*/
-			/*		  ¡ý		pipeidx									*/
-			/*		push											*/
+			/*		  ¡ý			¡ü	¡ý								*/
+			/*		  ¡ý		pipeidx	¡ý								*/
+			/*	overflow push	timed push							*/
 
 			do 
 			{

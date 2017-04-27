@@ -387,6 +387,8 @@ namespace NvCodec
 
 			}
 
+			// std::cout << "frame timestamp " << pDispInfo->timestamp << std::endl;
+
 			do
 			{
 				/**

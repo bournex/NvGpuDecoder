@@ -25,27 +25,14 @@ private:
 		void Push(ISmartFramePtr frame) { boost::mutex::scoped_lock(mtx); frames.push_back(frame); }
 		ISmartFramePtr Pop() { 
 
-			do 
+			boost::mutex::scoped_lock(mtx);
+			if (frames.size())
 			{
-				unsigned int size = 0;
-				{
-					boost::mutex::scoped_lock(mtx);
-					size = frames.size();
-				}
-				if (size == 0)
-				{
-					boost::this_thread::sleep(boost::posix_time::microseconds(2000));
-				}
-				else
-				{
-					break;
-				}
-			} while (1);
-
-			boost::mutex::scoped_lock(mtx); 
-			ISmartFramePtr p = frames.front(); 
-			frames.pop_front(); 
-			return p; 
+				ISmartFramePtr p = frames.front();
+				frames.pop_front();
+				return p;
+			}
+			return NULL;
 		}
 	};
 
@@ -55,10 +42,17 @@ private:
 	PipeQueue *						pipequeue;
 	boost::atomic_bool				eop;			/* end of procedure */
 
+	CUcontext						cuCtx;		/* context handle */
+	CUvideoctxlock					cuCtxLock;	/* context lock */
+	char *							host_nv12;	/* host nv12 buffer */
+
 public:
-	BatchPipeline(unsigned int procedure = 1, unsigned int worker = 1)
-		:procedure_count(procedure), procedure_threads(worker), eop(false)
+	BatchPipeline(unsigned int procedure = 2, unsigned int worker = 1)
+		:procedure_count(procedure), procedure_threads(worker), eop(false), cuCtx(NULL), cuCtxLock(NULL), host_nv12(NULL)
 	{
+		/**
+		 * Description: init for device buffer copy
+		 */
 		pipequeue = new PipeQueue[procedure_count];
 
 		pipeline = new boost::thread *[procedure_count * procedure_threads];
@@ -91,6 +85,12 @@ public:
 			delete pipequeue;
 			pipequeue = NULL;
 		}
+
+		if (host_nv12)
+		{
+			delete host_nv12;
+			host_nv12 = NULL;
+		}
 	}
 
 	void EatBatch(ISmartFramePtr *batch, unsigned int len)
@@ -98,7 +98,7 @@ public:
 		/**
 		 * Description: push to pipeline entry queue
 		 */
-		cout << "receive batch data " << batch << " size " << len << endl;
+		// cout << "receive batch data " << batch << " size " << len << endl;
 		for (int i = 0; i < len; i++)
 			pipequeue[0].Push(batch[i]);
 	}
@@ -127,8 +127,9 @@ private:
 			else
 			{
 				/**
-				 * Description: last procedure, do nothing, frame destroyed
+				 * Description: last procedure
 				 */
+				std::cout << "frame " << frame->FrameNo() << " released~" << std::endl;
 			}
 		}
 	}
