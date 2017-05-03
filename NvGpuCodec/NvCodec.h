@@ -1,6 +1,7 @@
 #pragma once
 
 
+#include <boost/thread/lock_guard.hpp>
 #include <boost/thread/mutex.hpp>
 #include <boost/thread.hpp>
 #include <boost/atomic.hpp>
@@ -123,7 +124,8 @@ namespace NvCodec
 		{
 			int ret = 0;
 
-			boost::mutex::scoped_lock (qmtx);
+			// boost::mutex::scoped_lock (qmtx);
+			boost::lock_guard<boost::mutex> lock(qmtx);
 			for (std::list<CuFrame>::iterator it = qpic.begin(); it != qpic.end(); it++)
 			{
 				if (ret = cuvidUnmapVideoFrame(cuDecoder, it->dev_frame))
@@ -187,7 +189,8 @@ namespace NvCodec
 		inline int GetFrame(CuFrame &pic)
 		{
 			{
-				boost::mutex::scoped_lock(qmtx);
+				// boost::mutex::scoped_lock(qmtx);
+				boost::lock_guard<boost::mutex> lock(qmtx);
 				if (qpic.size())
 				{
 					pic = qpic.front();
@@ -240,7 +243,8 @@ namespace NvCodec
 		{
 			int ret = 0;
 
-			boost::mutex::scoped_lock (qmtx);
+			// boost::mutex::scoped_lock (qmtx);
+			boost::lock_guard<boost::mutex> lock(qmtx);
 
 			if (pic.dev_frame && (ret = cuvidUnmapVideoFrame(cuDecoder, pic.dev_frame)))
 			{
@@ -394,17 +398,22 @@ namespace NvCodec
 				/**
 				 * Description: ensure there's room for new picture
 				 */
-
 				{
-					boost::mutex::scoped_lock(qmtx);
+					// boost::mutex::scoped_lock(qmtx);
+					boost::lock_guard<boost::mutex> lock(qmtx);
 					if (qpic.size() < qlen)
-						break;	/* have free space */
+					{
+						/* have free space */
+						qpic.push_back(CuFrame(cWidth, cHeight, nPitch, pSrc, pDispInfo->timestamp));
+						break;
+					}
 					else if (qpic.size() == qlen)
 					{
 						/* queue full */
 						if (QSPopEarliest == qstrategy)
 						{
 							qpic.pop_front();
+							qpic.push_back(CuFrame(cWidth, cHeight, nPitch, pSrc, pDispInfo->timestamp));
 							break;
 						}
 						else if (QSPopLatest == qstrategy)
@@ -413,16 +422,12 @@ namespace NvCodec
 							cuvidUnmapVideoFrame(cuDecoder, pSrc);
 							return NV_OK;
 						}
-
 					}
 				}
 
 				boost::this_thread::sleep(boost::posix_time::milliseconds(20));
 
 			} while (1);
-
-			boost::mutex::scoped_lock(qmtx);
-			qpic.push_back(CuFrame(cWidth, cHeight, nPitch, pSrc, pDispInfo->timestamp));
 
 			return ret ? NV_FAILED : NV_OK;
 		}

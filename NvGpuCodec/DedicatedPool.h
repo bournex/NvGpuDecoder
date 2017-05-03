@@ -143,7 +143,7 @@ public:
 		/**
 		 * Description: clean up both lists
 		 */
-		boost::mutex::scoped_lock (lmtx);
+		boost::lock_guard<boost::mutex> lock(lmtx);
 
 		BOOST_FOREACH(WorkBuf &workbuf, worklist)
 		{
@@ -179,7 +179,7 @@ public:
 		unsigned char *buf = NULL;
 		do 
 		{
-			boost::mutex::scoped_lock (lmtx);
+			boost::lock_guard<boost::mutex> lock(lmtx);
 
 			/**
 			 * Description: find proper buffer in freelist
@@ -250,7 +250,7 @@ public:
 
 	inline bool Free(unsigned char* buf)
 	{
-		boost::mutex::scoped_lock (lmtx);
+		boost::lock_guard<boost::mutex> lock(lmtx);
 
 		std::map<unsigned char*, unsigned int>::iterator it = worklist.find(buf);
 		if (it == worklist.end())

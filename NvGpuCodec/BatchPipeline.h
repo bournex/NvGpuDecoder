@@ -22,10 +22,13 @@ private:
 		list<ISmartFramePtr>	frames;
 		boost::mutex			mtx;
 	public:
-		void Push(ISmartFramePtr frame) { boost::mutex::scoped_lock(mtx); frames.push_back(frame); }
+		void Push(ISmartFramePtr frame) { 
+			boost::lock_guard<boost::mutex> lock(mtx);
+			frames.push_back(frame); 
+		}
 		ISmartFramePtr Pop() { 
 
-			boost::mutex::scoped_lock(mtx);
+			boost::lock_guard<boost::mutex> lock(mtx);
 			if (frames.size())
 			{
 				ISmartFramePtr p = frames.front();
