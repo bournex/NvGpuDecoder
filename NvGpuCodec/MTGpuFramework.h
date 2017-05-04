@@ -42,22 +42,27 @@ public:
 	{
 		return origindata;
 	}
+
 	inline unsigned int Width()
 	{
 		return width;
 	}
+
 	inline unsigned int Height()
 	{
 		return height;
 	}
+
 	inline unsigned int Step()
 	{
 		return step;
 	}
+
 	inline unsigned int FrameNo()
 	{
 		return frameno;
 	}
+
 	inline unsigned int Tid()
 	{
 		return 0;
@@ -79,13 +84,14 @@ public:
 	}
 
 public:
-	unsigned char *					origindata;
-	volatile unsigned int			frameno;
-	volatile unsigned int			width;
-	volatile unsigned int			step;
-	volatile unsigned int			height;
+	unsigned char *			origindata;
+	volatile unsigned int	frameno;
+	volatile unsigned int	width;
+	volatile unsigned int	step;
+	volatile unsigned int	height;
+	volatile unsigned int	tid;
 
-	volatile unsigned int			batchidx;		/* identify batch sequence */
+	volatile unsigned int	batchidx;		/* identify batch sequence */
 
 private:
 	boost::atomic_uint32_t	refcnt;
@@ -205,14 +211,14 @@ public:
 
 private:
 
-	boost::atomic_bool						quit;
+	boost::atomic_bool						quit;		/* quit flag */
 
 	/**
 	 * Description: raw ISmartFrame object pool
 	 */
-	boost::mutex							mtx;
-	unsigned int							totalsize;
-	std::vector<ISmartFrame*>				freefrms;
+	boost::mutex							mtx;		/* pool lock */
+	unsigned int							totalsize;	/* pool max size */
+	std::vector<ISmartFrame*>				freefrms;	/* unused frames */
 	std::map<ISmartFrame*, unsigned int>	busyfrms;	/* save thread tid which correspond with same decoder */
 };
 
@@ -243,11 +249,11 @@ public:
 			throw("create smart frame pool failed");
 		}
 
-		// timerthread = new boost::thread(boost::bind(&FrameBatchPipe::TimerRoutine, this));
-		// if (!timerthread)
-		//{
-		//	throw("create timer thread failed");
-		//}
+		timerthread = new boost::thread(boost::bind(&FrameBatchPipe::TimerRoutine, this));
+		if (!timerthread)
+		{
+			throw("create timer thread failed");
+		}
 	}
 
 	~FrameBatchPipe()
@@ -314,6 +320,7 @@ public:
 			 */
 			static_cast<SmartFrame*>(frame.get())->origindata	= imageGpu;
 			static_cast<SmartFrame*>(frame.get())->frameno		= fidx++;
+			static_cast<SmartFrame*>(frame.get())->tid			= tid;
 			static_cast<SmartFrame*>(frame.get())->step			= s;
 			static_cast<SmartFrame*>(frame.get())->height		= h;
 			static_cast<SmartFrame*>(frame.get())->width		= w;

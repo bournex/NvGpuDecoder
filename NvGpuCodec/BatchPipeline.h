@@ -22,6 +22,12 @@ private:
 		list<ISmartFramePtr>	frames;
 		boost::mutex			mtx;
 	public:
+		PipeQueue(){}
+		~PipeQueue(){ 
+			cout << "PipeQueue destructing~" << endl;
+			frames.clear();
+			mtx.destroy();
+		}
 		void Push(ISmartFramePtr frame) { 
 			boost::lock_guard<boost::mutex> lock(mtx);
 			frames.push_back(frame); 
@@ -42,17 +48,21 @@ private:
 	unsigned int					procedure_count;
 	unsigned int					procedure_threads;
 	boost::thread **				pipeline;
-	PipeQueue *						pipequeue;
+	PipeQueue *						pipequeue;		/* each procedure have a PipeQueue, 
+														workers consume frames in there PipeQueue, 
+														processed frames push to next procedure queue */
 	boost::atomic_bool				eop;			/* end of procedure */
-
-	CUcontext						cuCtx;		/* context handle */
-	CUvideoctxlock					cuCtxLock;	/* context lock */
 	char *							host_nv12;	/* host nv12 buffer */
 
 public:
-	BatchPipeline(unsigned int procedure = 2, unsigned int worker = 1)
-		:procedure_count(procedure), procedure_threads(worker), eop(false), cuCtx(NULL), cuCtxLock(NULL), host_nv12(NULL)
+	/**
+	 * Description: init with "procedure" size of procedures, each procedure has "worker" threads.
+	 */
+	BatchPipeline(unsigned int procedure = 2, unsigned int worker = 2)
+		:procedure_count(procedure), procedure_threads(worker), eop(false), host_nv12(NULL)
 	{
+		BOOST_ASSERT(procedure > 0);
+		BOOST_ASSERT(worker > 0);
 		/**
 		 * Description: init for device buffer copy
 		 */
@@ -79,14 +89,16 @@ public:
 				}
 			}
 
+			/* [TODO] delete pipequeue will cause a DEBUG ASSERTION FAILED. unsolved.
+				if (pipequeue)
+				{
+					delete pipequeue;
+					pipequeue = NULL;
+				}
+			*/
+
 			delete pipeline;
 			pipeline = NULL;
-		}
-
-		if (pipequeue)
-		{
-			delete pipequeue;
-			pipequeue = NULL;
 		}
 
 		if (host_nv12)
@@ -101,7 +113,6 @@ public:
 		/**
 		 * Description: push to pipeline entry queue
 		 */
-		// cout << "receive batch data " << batch << " size " << len << endl;
 		for (int i = 0; i < len; i++)
 			pipequeue[0].Push(batch[i]);
 	}
@@ -125,6 +136,9 @@ private:
 
 			if ((pipeindex + 1) != procedure_count)
 			{
+				/**
+				 * Description: push to next procedure queue
+				 */
 				pipequeue[pipeindex + 1].Push(frame);
 			}
 			else

@@ -105,10 +105,10 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="BatchPipeline.h" />
+    <ClInclude Include="CircleBatch.h" />
     <ClInclude Include="DedicatedPool.h" />
     <ClInclude Include="MTGpuFramework.h" />
     <ClInclude Include="MTPlayGround.h" />
-    <ClInclude Include="NpMediaSource.h" />
     <ClInclude Include="NvCodec.h" />
     <ClInclude Include="NvCodecFrame.h" />
     <ClInclude Include="SmartFrame.h" />

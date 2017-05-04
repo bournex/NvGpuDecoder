@@ -264,8 +264,10 @@ namespace NvCodec
 
 		inline int Strategy(int s = -1)
 		{
+			/* get */
 			if (s == -1) return qstrategy;
 			BOOST_ASSERT((s >= QSWait) && (s < QSMax));
+			/* set */
 			return (qstrategy = s);
 		}
 		

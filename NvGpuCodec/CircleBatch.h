@@ -109,7 +109,7 @@ public:
 			if (_bcb)
 			{
 				_bcb(&_swap[0], _batch_size, _cbv);
-				//_swap.clear();
+				_swap.clear();
 				_swap.resize(_batch_size);
 			}
 			return _batch_size;
@@ -137,7 +137,7 @@ public:
 				if (_bcb)
 				{
 					_bcb(&_swap[0], pos, _cbv);
-					//_swap.clear();
+					_swap.clear();
 					_swap.resize(_batch_size);
 				}
 				return pos;
