@@ -1,3 +1,13 @@
+/**
+*                                Netposa Video Cloud
+*                         (c) Copyright 2011-2017, Netposa
+*                                All Rights Reserved
+*
+* File		: MTGpuFramework.h
+* Author	: Liu Xuefei
+* Time		: 2017-5-5
+*/
+
 #pragma once
 
 #include <thread>
@@ -19,8 +29,8 @@ using namespace boost;
 class SmartPoolInterface
 {
 public:
-	virtual int Put(ISmartFrame *sf)						= 0;
-	virtual ISmartFrame * Get(unsigned int tid)				= 0;
+	virtual int Put(ISmartFrame *sf) = 0;
+	virtual ISmartFrame * Get(unsigned int tid) = 0;
 	virtual ~SmartPoolInterface() {};
 };
 
@@ -68,6 +78,11 @@ public:
 		return 0;
 	}
 
+	inline bool LastFrame()
+	{
+		return false;
+	}
+
 	inline void add_ref(ISmartFrame * sf)
 	{
 		SmartFrame *ptr = static_cast<SmartFrame*>(sf);
@@ -98,13 +113,21 @@ private:
 	SmartPoolInterface	*	sfpool;
 };
 
+
+class IFrameRestore
+{
+public:
+	virtual void Return(void *dev_ptr) = 0;
+};
+
+
 /**
- * Description: fixed size smart frame pool
- */
+* Description: fixed size smart frame pool
+*/
 class SmartFramePool : public SmartPoolInterface
 {
 public:
-	SmartFramePool(unsigned int poolsize = 2 * 8):quit(false), totalsize(poolsize)
+	SmartFramePool(IFrameRestore* prestore, unsigned int poolsize = 2 * 8) :quit(false), totalsize(poolsize), pres(prestore)
 	{
 		BOOST_ASSERT(totalsize > 0);
 
@@ -115,15 +138,15 @@ public:
 	~SmartFramePool()
 	{
 		/**
-		 * Description: cleanup pool items
-		 */
+		* Description: cleanup pool items
+		*/
 		quit = true;
 
-		do 
+		do
 		{
 			/**
-			 * Description: wait for frames freed
-			 */
+			* Description: wait for frames freed
+			*/
 			boost::this_thread::sleep(boost::posix_time::microseconds(1000));
 		} while (BusySize());
 
@@ -140,8 +163,9 @@ public:
 	inline int Put(ISmartFrame *sf)
 	{
 		/**
-		 * Description: remove bind to thumbnail buffer
-		 */
+		* Description: remove bind to thumbnail buffer
+		*/
+		pres->Return((void*)sf->NV12());
 		boost::lock_guard<boost::mutex> lock(mtx);
 		freefrms.push_back(sf);
 		busyfrms.erase(sf);
@@ -159,18 +183,18 @@ public:
 
 		ISmartFrame * sf = NULL;
 
-		do 
+		do
 		{
 			{
 				/**
-				 * Description: acquire frame
-				 */
+				* Description: acquire frame
+				*/
 				boost::lock_guard<boost::mutex> lock(mtx);
 				if (freefrms.size())
 				{
 					/**
-					 * Description: have free frame
-					 */
+					* Description: have free frame
+					*/
 					sf = freefrms.back();
 					freefrms.pop_back();
 					busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
@@ -179,8 +203,8 @@ public:
 				else if ((freefrms.size() + busyfrms.size()) < totalsize)
 				{
 					/**
-					 * Description: frame lower than pool limit size, create new one
-					 */
+					* Description: frame lower than pool limit size, create new one
+					*/
 					sf = new SmartFrame(this);
 					busyfrms.insert(std::pair<ISmartFrame *, unsigned int>(sf, tid));
 					break;
@@ -188,8 +212,8 @@ public:
 			}
 
 			/**
-			 * Description: wait for free frame
-			 */
+			* Description: wait for free frame
+			*/
 			boost::this_thread::sleep(boost::posix_time::microseconds(200));
 
 		} while (!sf);
@@ -212,10 +236,11 @@ public:
 private:
 
 	boost::atomic_bool						quit;		/* quit flag */
+	IFrameRestore *							pres;		/* buffer restore handle */
 
 	/**
-	 * Description: raw ISmartFrame object pool
-	 */
+	* Description: raw ISmartFrame object pool
+	*/
 	boost::mutex							mtx;		/* pool lock */
 	unsigned int							totalsize;	/* pool max size */
 	std::vector<ISmartFrame*>				freefrms;	/* unused frames */
@@ -223,27 +248,27 @@ private:
 };
 
 /**
- * Description: thumbnail default resolution [TODO]
- */
+* Description: thumbnail default resolution [TODO]
+*/
 #define BOUNDARY_SIZE (640 * 320)
 
-class FrameBatchPipe
+class FrameBatchPipe : public IFrameRestore
 {
 public:
-	FrameBatchPipe(	FrameBatchRoutine	fbroutine			/* frame batch ready callback */,
-					void *				invk		= 0		/* invoker pointer */,
-					const unsigned int	batch_size	= 8		/* batch init size, equal to or more than threads */,
-					const unsigned int	batch_cnt	= 2		/* batch init count, equal to or less than decode queue len */,
-					const unsigned int	time_out	= 40	/* millisecond */)
-					
-		:fbcb(fbroutine), invoker(invk), sfpool(0), batchpipe(fbroutine, invk, batch_size, batch_cnt)
+	FrameBatchPipe(FrameBatchRoutine	fbroutine/* frame batch ready callback */,
+		void *				invk = 0			/* invoker pointer */,
+		const unsigned int	batch_size = 8		/* batch init size, equal to or more than threads */,
+		const unsigned int	batch_cnt = 8		/* batch init count, equal to or less than decode queue len */,
+		const unsigned int	time_out = 40		/* millisecond */)
+
+		:fbcb(fbroutine), invoker(invk), sfpool(0), batchpipe(OnBatchPop, this, batch_size, batch_cnt)
 	{
 		FORMAT_DEBUG(__FUNCTION__, __LINE__, "constructing FrameBatchPipe");
 		BOOST_ASSERT(fbroutine);
 
-		timeout		= min(max(time_out, 1), 50);		/* [1,50]	*/
+		timeout = min(max(time_out, 1), 50);		/* [1,50]	*/
 
-		sfpool = new SmartFramePool(batch_size * batch_cnt);
+		sfpool = new SmartFramePool(this, batch_size * batch_cnt);
 		if (!sfpool)
 		{
 			throw("create smart frame pool failed");
@@ -283,10 +308,10 @@ public:
 			sfpool = NULL;
 		}
 	}
-	
+
 	inline int InputFrame(PCC_Frame *frame, unsigned int tid)
 	{
-		return InputFrame((unsigned char *)frame->imageGPU, 
+		return InputFrame((unsigned char *)frame->imageGPU,
 			frame->width, frame->height, frame->stepGPU[0], tid);
 	}
 
@@ -299,36 +324,42 @@ public:
 	int InputFrame(unsigned char *imageGpu, unsigned int w, unsigned int h, unsigned int s, unsigned int tid)
 	{
 		/**
-		 * Description: convert PCC_Frame to SmartFrame
-						input SmartFrame to batch pipe
-						if reach one batch is full, push batch
-		 */
+		* Description: convert PCC_Frame to SmartFrame
+		input SmartFrame to batch pipe
+		if reach one batch is full, push batch
+		*/
 		ISmartFramePtr frame(sfpool->Get(tid));
-	
+
 		if (!frame)
 		{
 			/**
-			 * Description: no frame
-			 */
+			* Description: no frame
+			*/
 			FORMAT_DEBUG(__FUNCTION__, __LINE__, "get frame failed");
 			return -1;
 		}
 		else
 		{
 			/**
-			 * Description: initialize smart frame
-			 */
-			static_cast<SmartFrame*>(frame.get())->origindata	= imageGpu;
-			static_cast<SmartFrame*>(frame.get())->frameno		= fidx++;
-			static_cast<SmartFrame*>(frame.get())->tid			= tid;
-			static_cast<SmartFrame*>(frame.get())->step			= s;
-			static_cast<SmartFrame*>(frame.get())->height		= h;
-			static_cast<SmartFrame*>(frame.get())->width		= w;
+			* Description: initialize smart frame
+			*/
+			static_cast<SmartFrame*>(frame.get())->origindata = imageGpu;
+			static_cast<SmartFrame*>(frame.get())->frameno = fidx++;
+			static_cast<SmartFrame*>(frame.get())->tid = tid;
+			static_cast<SmartFrame*>(frame.get())->step = s;
+			static_cast<SmartFrame*>(frame.get())->height = h;
+			static_cast<SmartFrame*>(frame.get())->width = w;
 
 			batchpipe.push(frame);
 		}
 
 		return 0;
+	}
+
+	void Return(void *dev_ptr)
+	{
+		// boost::lock_guard<boost::mutex> lk(mtx);
+		freedevs.push_back(dev_ptr);
 	}
 
 private:
@@ -338,23 +369,44 @@ private:
 		boost::asio::io_service iosrv; /* io_service object */
 
 		/**
-		 * Description: initialize timer with io_service
-		 */
+		* Description: initialize timer with io_service
+		*/
 		deadline = new boost::asio::deadline_timer(iosrv, boost::posix_time::milliseconds(timeout));
 		deadline->async_wait(boost::bind(&FrameBatchPipe::PushPipeTimer, this));
+	}
+
+	friend void OnBatchPop(ISmartFramePtr *p, unsigned int nlen, void *user)
+	{
+		((FrameBatchPipe*)user)->BatchPop(p, nlen);
+	}
+	void BatchPop(ISmartFramePtr *p, unsigned int nlen)
+	{
+		if (fbcb)
+		{
+			// boost::lock_guard<boost::mutex> lk(mtx);
+			if (freedevs.size())
+			{
+				fbcb(p, nlen, &freedevs[0], freedevs.size(), invoker);
+				freedevs.clear();
+			}
+			else
+			{
+				fbcb(p, nlen, NULL, 0, invoker);
+			}
+		}
 	}
 
 	void PushPipeTimer()
 	{
 		/**
-		 * Description: time's up, reset timer first
-		 */
+		* Description: time's up, reset timer first
+		*/
 		deadline->expires_at(deadline->expires_at() + boost::posix_time::milliseconds(timeout));
 		deadline->async_wait(boost::bind(&FrameBatchPipe::PushPipeTimer, this));
 
 		/**
-		 * Description: do push
-		 */
+		* Description: do push
+		*/
 		batchpipe.push();
 	}
 
@@ -368,6 +420,8 @@ private:
 	SmartPoolInterface *				sfpool;			/* smart frame pool */
 	FrameBatchRoutine					fbcb;			/* frame batch ready callback */
 	void *								invoker;		/* callback pointer */
+	boost::mutex						mtx;			/* lock for free device buffer vector */
+	vector<void*>						freedevs;		/* returned device pointers */
 
 #if (__cplusplus >= 201103L)
 	static thread_local unsigned int			fidx;	/* current thread frame index */

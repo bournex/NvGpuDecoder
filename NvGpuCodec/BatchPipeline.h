@@ -2,7 +2,9 @@
 
 #include <boost/thread.hpp>
 #include <boost/atomic.hpp>
-
+#include <opencv/highgui.h>
+#include <opencv/cv.h>
+#include <opencv/cxcore.h>
 #include <queue>
 #include "SmartFrame.h"
 using namespace std;
@@ -58,7 +60,7 @@ public:
 	/**
 	 * Description: init with "procedure" size of procedures, each procedure has "worker" threads.
 	 */
-	BatchPipeline(unsigned int procedure = 2, unsigned int worker = 2)
+	BatchPipeline(unsigned int procedure = 2, unsigned int worker = 1)
 		:procedure_count(procedure), procedure_threads(worker), eop(false), host_nv12(NULL)
 	{
 		BOOST_ASSERT(procedure > 0);
@@ -90,11 +92,11 @@ public:
 			}
 
 			/* [TODO] delete pipequeue will cause a DEBUG ASSERTION FAILED. unsolved.
-				if (pipequeue)
-				{
-					delete pipequeue;
-					pipequeue = NULL;
-				}
+			if (pipequeue)
+			{
+				delete pipequeue;
+				pipequeue = NULL;
+			}
 			*/
 
 			delete pipeline;

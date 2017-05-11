@@ -49,6 +49,7 @@ public:
 	virtual unsigned int	FrameNo()					= 0;	/* get frame sequence number */
 
 	virtual unsigned int	Tid()						= 0;	/* get which thread this frame belong to */
+	virtual bool			LastFrame()					= 0;	/* is last frame, always return false if dealing online video */
 
 	virtual ~ISmartFrame() {};
 protected:
@@ -79,4 +80,4 @@ typedef boost::intrusive_ptr<ISmartFrame> ISmartFramePtr;
 /**
  * Description: batch data callback function
  */
-typedef void(*FrameBatchRoutine)(ISmartFramePtr *p, unsigned int len, void * invoker);
+typedef void(*FrameBatchRoutine)(ISmartFramePtr *p, unsigned int len, void**expire, unsigned int explen, void * invoker);

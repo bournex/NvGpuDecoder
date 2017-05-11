@@ -1,8 +1,11 @@
 #pragma once
 #include <boost/thread.hpp>
+#include <map>
 #include "NpMediaSource.h"
 
-typedef void (*PlayWithFrame)(NvCodec::CuFrame &frame, unsigned int tid);
+using namespace std;
+
+typedef void (*PlayWithFrame)(ISmartFramePtr *p, unsigned int len, void * invoker);
 
 class MtPlayGround
 {
@@ -11,9 +14,14 @@ private:
 	unsigned int		length;
 	boost::atomic_bool	eof;
 	PlayWithFrame		playcb;
+	void *				invoker;
+	FrameBatchPipe		batchpipe;
+	boost::mutex		mtx;
+	std::map<void*, NvCodec::NvDecoder*> mpp;
 
 public:
-	MtPlayGround(char **srcvideos, unsigned int len, PlayWithFrame _playcb) : length(len), eof(false), playcb(_playcb)
+	MtPlayGround(char **srcvideos, unsigned int len, PlayWithFrame _playcb, void *_invoker)
+		: length(len), eof(false), playcb(_playcb), invoker(_invoker), batchpipe(OnBatchData, this)
 	{
 		/**
 		 * Description: init nvidia environment
@@ -50,12 +58,42 @@ public:
 		}
 	}
 
+	friend void OnBatchData(ISmartFramePtr *p, unsigned int len, void **expire, unsigned int explen, void * user)
+	{
+		((MtPlayGround*)user)->BatchData(p, len, expire, explen);
+	}
+
+	void BatchData(ISmartFramePtr *p, unsigned int len, void **expire, unsigned int explen)
+	{
+		/**
+		 * Description: return back device decode buffer
+		 */
+		if (expire && explen)
+		{
+			for (int i = 0; i < explen; i++)
+			{
+				// boost::lock_guard<boost::mutex> lk(mtx);
+				std::map<void*, NvCodec::NvDecoder*>::iterator it = mpp.find(expire[i]);
+				if (it != mpp.end())
+				{
+					it->second->PutFrame(NvCodec::CuFrame((CUdeviceptr)expire[i]));
+					mpp.erase(it);
+				}
+			}
+		}
+
+		if (playcb)
+		{
+			playcb(p, len, invoker);
+		}
+	}
+
 	void Worker(boost::filesystem::path p)
 	{
 		/**
 		 * Description: create media source & decoder
 		 */
-		NvCodec::NvDecoder							decoder;
+		NvCodec::NvDecoder							decoder(0, 16);
 		boost::scoped_ptr<NvCodec::NvMediaSource>	media(NULL);
 		unsigned int tid = GetCurrentThreadId();
 
@@ -96,12 +134,10 @@ public:
 				/**
 				 * Description: process the nv12 frame
 				 */
-				if (playcb)
-				{
-					playcb(frame, tid);
-				}
+				batchpipe.InputFrame(frame, tid);
 
-				decoder.PutFrame(frame);
+				// boost::lock_guard<boost::mutex> lk(mtx);
+				mpp.insert(std::pair<void*, NvCodec::NvDecoder*>((void*)frame.dev_frame, &decoder));
 			}
 		}
 		FORMAT_DEBUG(__FUNCTION__, __LINE__, "after get frame");

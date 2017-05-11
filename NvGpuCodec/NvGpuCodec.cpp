@@ -15,6 +15,14 @@
 
 using namespace std;
 
+void OnBatchData(ISmartFramePtr *batch, unsigned int len, void *invoker)
+{
+	for (int i = 0; i < len; i++)
+	{
+		cout << batch[i] << endl;
+	}
+}
+
 int main(int argc, char **argv)
 {	
 	BOOST_ASSERT(argc > 1);
@@ -23,15 +31,7 @@ int main(int argc, char **argv)
 
 	cout << "start up argument " << argc << endl;
 
-	auto decodeproc = [](NvCodec::CuFrame &frame, unsigned int tid) {
-		auto batchproc = [](ISmartFramePtr *batch, unsigned int len, void *invoker) {
-			static BatchPipeline bp;
-			bp.EatBatch(batch, len);
-		};
-		static FrameBatchPipe pipe(batchproc);
-		pipe.InputFrame(frame, tid);
-	};
-	MtPlayGround mvs(&argv[1], argc - 1, decodeproc);
+	MtPlayGround mvs(&argv[1], argc - 1, OnBatchData, NULL);
 
 	getchar();
 

@@ -390,7 +390,7 @@ namespace NvCodec
 			while (ret = cuvidMapVideoFrame(cuDecoder, pDispInfo->picture_index, &pSrc,
 				&nPitch, &videoProcessingParameters))
 			{
-
+				Sleep(5);
 			}
 
 			// std::cout << "frame timestamp " << pDispInfo->timestamp << std::endl;

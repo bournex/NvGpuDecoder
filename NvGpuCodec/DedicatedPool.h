@@ -68,16 +68,10 @@ public:
 		BOOST_ASSERT(len);
 
 		int ret = 0;
-		CUdeviceptr p = NULL;
+		CUdeviceptr p;
 
-#ifdef GPU_ALLOC
 		if (ret = cuMemAlloc(&p, len))
 			FORMAT_FATAL("alloc device buffer failed", ret);
-#else
-		/**
-		 * Description: no implementation
-		 */
-#endif
 
 		return (void*)p;
 	}
@@ -88,25 +82,18 @@ public:
 		BOOST_ASSERT(len);
 
 		int ret = 0;
-		p = NULL;
-
-#ifdef GPU_ALLOC
 		if (ret = cuMemFree((CUdeviceptr)p))
 		{
 			FORMAT_FATAL("free device buffer failed", ret);
 			return NULL;
 		}
 
+		p = NULL;
 		if (ret = cuMemAlloc((CUdeviceptr*)&p, len))
 		{
 			FORMAT_FATAL("re-alloc device buffer failed", ret);
 			return NULL;
 		}
-#else
-		/**
-		* Description: no implementation
-		*/
-#endif
 
 		return (void*)p;
 	}
@@ -115,17 +102,11 @@ public:
 	{
 		BOOST_ASSERT(p);
 
-#ifdef GPU_ALLOC
 		int ret = 0;
 		if (ret = cuMemFree((CUdeviceptr)p))
 		{
 			FORMAT_FATAL("free device buffer failed", ret);
 		}
-#else
-		/**
-		* Description: no implementation
-		*/
-#endif
 	}
 };
 
@@ -291,8 +272,5 @@ public:
 	}
 };
 
-/**
- * Description: pre-defined pool types
- */
 typedef DedicatedPool<CpuAllocator>		HostPool;
 typedef DedicatedPool<GpuAllocator>		DevicePool;

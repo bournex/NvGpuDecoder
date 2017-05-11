@@ -28,6 +28,7 @@ namespace NvCodec
 		unsigned long long	timestamp;	/* timestamp */
 
 		CuFrame() {}
+		CuFrame(CUdeviceptr _f) { dev_frame = _f; host_frame = NULL; }
 		CuFrame(unsigned int _w, unsigned int _h, unsigned int _pitch, CUdeviceptr _f, unsigned long long _t)
 		{
 			w = _w;
