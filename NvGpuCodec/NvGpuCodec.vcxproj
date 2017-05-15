@@ -20,7 +20,7 @@
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'" Label="Configuration">
     <ConfigurationType>Application</ConfigurationType>
     <PlatformToolset>v140</PlatformToolset>
-    <CharacterSet>Unicode</CharacterSet>
+    <CharacterSet>MultiByte</CharacterSet>
     <WholeProgramOptimization>true</WholeProgramOptimization>
   </PropertyGroup>
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|Win32'" Label="Configuration">
@@ -66,9 +66,10 @@
       <PrecompiledHeader>NotUsing</PrecompiledHeader>
       <WarningLevel>Level3</WarningLevel>
       <DebugInformationFormat>EditAndContinue</DebugInformationFormat>
+      <AdditionalIncludeDirectories>$(ProjectDir)cuda;$(ProjectDir)ffmpeg</AdditionalIncludeDirectories>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>cuda.lib;nvcuvid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalDependencies>cuda.lib;nvcuvid.lib;avcodec.lib;avformat.lib;%(AdditionalDependencies)</AdditionalDependencies>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AssemblyDebug>true</AssemblyDebug>
       <GenerateMapFile>true</GenerateMapFile>
@@ -76,13 +77,14 @@
       <MapExports>true</MapExports>
       <SubSystem>Console</SubSystem>
       <TargetMachine>MachineX86</TargetMachine>
+      <AdditionalLibraryDirectories>$(ProjectDir)cuda/lib;$(ProjectDir)ffmpeg;</AdditionalLibraryDirectories>
     </Link>
   </ItemDefinitionGroup>
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Release|Win32'">
     <ClCompile>
       <Optimization>Disabled</Optimization>
       <IntrinsicFunctions>true</IntrinsicFunctions>
-      <AdditionalIncludeDirectories>$(ProjectDir)cuda;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <AdditionalIncludeDirectories>$(ProjectDir)ffmpeg;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
       <PreprocessorDefinitions>WIN32;NDEBUG;_CONSOLE;%(PreprocessorDefinitions)</PreprocessorDefinitions>
       <RuntimeLibrary>MultiThreadedDLL</RuntimeLibrary>
       <FunctionLevelLinking>true</FunctionLevelLinking>
@@ -91,8 +93,8 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>cuda.lib;nvcuvid.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)cuda/lib;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>avcodec.lib;avformat.lib;avutil.lib;swscale.lib;cuda.lib;nvcuvid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)ffmpeg;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
       <OptimizeReferences>true</OptimizeReferences>
@@ -104,11 +106,14 @@
     <ClCompile Include="NvGpuCodec.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="BaseCodec.h" />
     <ClInclude Include="BatchPipeline.h" />
     <ClInclude Include="CircleBatch.h" />
     <ClInclude Include="DedicatedPool.h" />
+    <ClInclude Include="FFCodec.h" />
     <ClInclude Include="MTGpuFramework.h" />
     <ClInclude Include="MTPlayGround.h" />
+    <ClInclude Include="NpMediaSource.h" />
     <ClInclude Include="NvCodec.h" />
     <ClInclude Include="NvCodecFrame.h" />
     <ClInclude Include="SmartFrame.h" />

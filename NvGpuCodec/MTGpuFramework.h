@@ -75,7 +75,7 @@ public:
 
 	inline unsigned int Tid()
 	{
-		return 0;
+		return tid;
 	}
 
 	inline bool LastFrame()

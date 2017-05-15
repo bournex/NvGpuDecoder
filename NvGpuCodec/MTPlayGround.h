@@ -2,6 +2,8 @@
 #include <boost/thread.hpp>
 #include <map>
 #include "NpMediaSource.h"
+#include "FFCodec.h"
+
 
 using namespace std;
 
@@ -17,7 +19,7 @@ private:
 	void *				invoker;
 	FrameBatchPipe		batchpipe;
 	boost::mutex		mtx;
-	std::map<void*, NvCodec::NvDecoder*> mpp;
+	std::map<void*, BaseCodec*> mpp;
 
 public:
 	MtPlayGround(char **srcvideos, unsigned int len, PlayWithFrame _playcb, void *_invoker)
@@ -73,7 +75,7 @@ public:
 			for (int i = 0; i < explen; i++)
 			{
 				// boost::lock_guard<boost::mutex> lk(mtx);
-				std::map<void*, NvCodec::NvDecoder*>::iterator it = mpp.find(expire[i]);
+				std::map<void*, BaseCodec*>::iterator it = mpp.find(expire[i]);
 				if (it != mpp.end())
 				{
 					it->second->PutFrame(NvCodec::CuFrame((CUdeviceptr)expire[i]));
@@ -93,30 +95,32 @@ public:
 		/**
 		 * Description: create media source & decoder
 		 */
-		NvCodec::NvDecoder							decoder(0, 16);
-		boost::scoped_ptr<NvCodec::NvMediaSource>	media(NULL);
+		boost::scoped_ptr<BaseCodec>				decoder(NULL);
+		boost::scoped_ptr<BaseMediaSource>			media(NULL);
 		unsigned int tid = GetCurrentThreadId();
 
 		if (p.extension() == boost::filesystem::path(".h264"))
 		{
 			/**
-			 * Description: mbf file
+			 * Description: raw h264 file
 			 */
-			media.reset(new NvCodec::NvMediaSource(p.string(), &decoder));
+			decoder.reset(new NvCodec::NvDecoder(0, 16));
+			media.reset(new NvCodec::NvMediaSource(p.string(), decoder.get()));
 		}
 		else if (p.extension() == boost::filesystem::path(".mbf"))
 		{
 			/**
-			 * Description: raw h264 file
+			 * Description: mbf file [TODO]
 			 */
-			media.reset(new NvCodec::NpMediaSource(p.string(), &decoder));
+			// media.reset(new NvCodec::NpMediaSource(p.string(), &decoder));
 		}
 		else
 		{
 			/**
 			 * Description: unrecognized format
 			 */
-			return ;
+			decoder.reset(new FFCodec());
+			media.reset(new NvCodec::FFMediaSource(p.string(), decoder.get()));
 		}
 
 		NvCodec::CuFrame frame;
@@ -125,7 +129,7 @@ public:
 		std::cout << std::boolalpha << eof << media->Eof() << std::endl;
 		while (!eof /*&& !media->Eof()*/)
 		{
-			if (decoder.GetFrame(frame))
+			if (decoder->GetFrame(frame))
 			{
 				boost::this_thread::sleep(boost::posix_time::milliseconds(10));
 			}
@@ -136,8 +140,10 @@ public:
 				 */
 				batchpipe.InputFrame(frame, tid);
 
-				// boost::lock_guard<boost::mutex> lk(mtx);
-				mpp.insert(std::pair<void*, NvCodec::NvDecoder*>((void*)frame.dev_frame, &decoder));
+				/**
+				 * Description: 
+				 */
+				mpp.insert(std::pair<void*, BaseCodec*>((void*)frame.dev_frame, decoder.get()));
 			}
 		}
 		FORMAT_DEBUG(__FUNCTION__, __LINE__, "after get frame");

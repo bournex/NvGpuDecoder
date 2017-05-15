@@ -9,6 +9,7 @@
 #include <string>
 #include <list>
 
+#include "BaseCodec.h"
 #include "DedicatedPool.h"
 #include "NvCodecFrame.h"
 
@@ -59,7 +60,7 @@ namespace NvCodec
 		}
 	};
 
-	class NvDecoder
+	class NvDecoder : public BaseCodec
 	{
 	public:
 		/**
@@ -74,7 +75,6 @@ namespace NvCodec
 			, cHeight(0)
 			, qlen(queuelen)
 			, bMap2Host(map2host)
-			, qstrategy(QSWait)
 		{
 			int ret = 0;
 
@@ -455,15 +455,6 @@ namespace NvCodec
 		boost::mutex				qmtx;
 		unsigned int				qlen;		/* cached for decoded queue length */
 		std::list<CuFrame>			qpic;		/* cached for decoded nv12 data */
-		boost::atomic_int32_t		qstrategy;	/* queue control strategy */
-
-		enum QueueStrategy
-		{
-			QSWait			= 0,	/* wait until queue has empty place */
-			QSPopEarliest	= 1,	/* pop the earliest one */
-			QSPopLatest		= 2,	/* pop the latest one */
-			QSMax
-		};
 
 		/**
 		 * Description: host memory management 
@@ -487,28 +478,30 @@ namespace NvCodec
 	/**
 	 * Description: definition of video source parsing
 	 */
-	class NvMediaSource
+	class NvMediaSource : public BaseMediaSource
 	{
 	public:
 		typedef void(*MediaSrcDataCallback)(unsigned char *data, unsigned int len, void *p);
 
 		NvMediaSource(std::string srcvideo, MediaSrcDataCallback msdcb, void*user)
-			: eomf(false), datacb(msdcb), cbpointer(user), decoder(NULL)
+			: reader(NULL), eomf(false), BaseMediaSource(srcvideo, msdcb, user)
 		{
 			BOOST_ASSERT(msdcb);
 
 			reader = new boost::thread(boost::bind(&NvMediaSource::MediaReader, this, srcvideo));
+
+			BOOST_ASSERT(reader);
 		}
 
-		NvMediaSource(std::string srcvideo, NvDecoder *dec)
-			: decoder(dec), datacb(NULL), cbpointer(NULL)
+		NvMediaSource(std::string srcvideo, BaseCodec *dec)
+			: reader(NULL), eomf(false), BaseMediaSource(srcvideo, dec)
 		{
-			BOOST_ASSERT(dec);
-
 			reader = new boost::thread(boost::bind(&NvMediaSource::MediaReader, this, srcvideo));
+
+			BOOST_ASSERT(reader);
 		}
 
-		~NvMediaSource()
+		virtual ~NvMediaSource()
 		{
 			FORMAT_DEBUG(__FUNCTION__, __LINE__, "video source destroyed");
 			eomf = true;
@@ -584,13 +577,8 @@ namespace NvCodec
 			eomf = true;
 		}
 
-	private:
-		boost::thread *						reader;		/* stream file reading thread handle */
-
 	protected:
-		boost::atomic_bool					eomf;		/* end of media flag */
-		NvDecoder *							decoder;	/* NvDecoder object */
-		void *								cbpointer;	/* user callback variable */
-		NvMediaSource::MediaSrcDataCallback	datacb;		/* user callback */
+		boost::atomic_bool	eomf;		/* end of media flag */
+		boost::thread *		reader;		/* stream file reading thread handle */
 	};
 }

@@ -17,9 +17,11 @@ using namespace std;
 
 void OnBatchData(ISmartFramePtr *batch, unsigned int len, void *invoker)
 {
+	static int idx = 0;
+	cout << "batch index : " << idx++ << endl;
 	for (int i = 0; i < len; i++)
 	{
-		cout << batch[i] << endl;
+		cout << batch[i]->Tid() << endl;
 	}
 }
 
