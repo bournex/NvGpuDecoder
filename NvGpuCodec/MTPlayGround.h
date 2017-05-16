@@ -29,7 +29,7 @@ public:
 		 * Description: init nvidia environment
 		 */
 		BOOST_ASSERT(len > 0);
-		NvCodec::NvCodecInit();
+		// 
 
 		Workers = new boost::thread *[len];
 		for (unsigned int i=0; i<len; i++)
@@ -97,6 +97,7 @@ public:
 		 */
 		boost::scoped_ptr<BaseCodec>				decoder(NULL);
 		boost::scoped_ptr<BaseMediaSource>			media(NULL);
+
 		unsigned int tid = GetCurrentThreadId();
 
 		if (p.extension() == boost::filesystem::path(".h264"))
@@ -104,6 +105,7 @@ public:
 			/**
 			 * Description: raw h264 file
 			 */
+			NvCodec::NvCodecInit();
 			decoder.reset(new NvCodec::NvDecoder(0, 16));
 			media.reset(new NvCodec::NvMediaSource(p.string(), decoder.get()));
 		}
@@ -112,15 +114,15 @@ public:
 			/**
 			 * Description: mbf file [TODO]
 			 */
-			// media.reset(new NvCodec::NpMediaSource(p.string(), &decoder));
 		}
 		else
 		{
 			/**
 			 * Description: unrecognized format
 			 */
-			decoder.reset(new FFCodec());
-			media.reset(new NvCodec::FFMediaSource(p.string(), decoder.get()));
+			FFCodec::FFInit();
+			decoder.reset(new FFCodec::FFMpegCodec());
+			media.reset(new FFCodec::FFMediaSource(p.string(), decoder.get()));
 		}
 
 		NvCodec::CuFrame frame;
@@ -141,7 +143,7 @@ public:
 				batchpipe.InputFrame(frame, tid);
 
 				/**
-				 * Description: 
+				 * Description: decoded frame MUST have device buffer data.
 				 */
 				mpp.insert(std::pair<void*, BaseCodec*>((void*)frame.dev_frame, decoder.get()));
 			}

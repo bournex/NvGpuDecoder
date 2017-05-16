@@ -93,13 +93,18 @@
       <DebugInformationFormat>ProgramDatabase</DebugInformationFormat>
     </ClCompile>
     <Link>
-      <AdditionalDependencies>avcodec.lib;avformat.lib;avutil.lib;swscale.lib;cuda.lib;nvcuvid.lib;%(AdditionalDependencies)</AdditionalDependencies>
-      <AdditionalLibraryDirectories>$(ProjectDir)ffmpeg;%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
+      <AdditionalDependencies>D:\Github\NvGpuDecoder\NvGpuCodec\ffmpeg\avformat.lib;D:\Github\NvGpuDecoder\NvGpuCodec\ffmpeg\avutil.lib;D:\Github\NvGpuDecoder\NvGpuCodec\ffmpeg\avcodec.lib;D:\Github\NvGpuDecoder\NvGpuCodec\ffmpeg\swscale.lib;D:\Github\NvGpuDecoder\NvGpuCodec\ffmpeg\avdevice.lib;D:\Github\NvGpuDecoder\NvGpuCodec\ffmpeg\postproc.lib;D:\Github\NvGpuDecoder\NvGpuCodec\ffmpeg\avfilter.lib;cuda.lib;nvcuvid.lib;%(AdditionalDependencies)</AdditionalDependencies>
+      <AdditionalLibraryDirectories>$(ProjectDir)ffmpeg;$(ProjectDir);%(AdditionalLibraryDirectories)</AdditionalLibraryDirectories>
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <SubSystem>Console</SubSystem>
       <OptimizeReferences>true</OptimizeReferences>
       <EnableCOMDATFolding>true</EnableCOMDATFolding>
       <TargetMachine>MachineX86</TargetMachine>
+      <IgnoreAllDefaultLibraries>false</IgnoreAllDefaultLibraries>
+      <IgnoreSpecificDefaultLibraries>
+      </IgnoreSpecificDefaultLibraries>
+      <ImageHasSafeExceptionHandlers>true</ImageHasSafeExceptionHandlers>
+      <DelayLoadDLLs>nvcuda.dll;nvcuvid.dll;avutil-55.dll;avformat-57.dll;avcodec-57.dll</DelayLoadDLLs>
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
@@ -113,7 +118,6 @@
     <ClInclude Include="FFCodec.h" />
     <ClInclude Include="MTGpuFramework.h" />
     <ClInclude Include="MTPlayGround.h" />
-    <ClInclude Include="NpMediaSource.h" />
     <ClInclude Include="NvCodec.h" />
     <ClInclude Include="NvCodecFrame.h" />
     <ClInclude Include="SmartFrame.h" />

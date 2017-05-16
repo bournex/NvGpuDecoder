@@ -2,9 +2,7 @@
 
 #include <boost/thread.hpp>
 #include <boost/atomic.hpp>
-#include <opencv/highgui.h>
-#include <opencv/cv.h>
-#include <opencv/cxcore.h>
+
 #include <queue>
 #include "SmartFrame.h"
 using namespace std;

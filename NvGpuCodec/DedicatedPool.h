@@ -127,7 +127,7 @@ private:
 	boost::mutex	lmtx;
 
 public:
-	explicit DedicatedPool(unsigned int len = 8):poolsize(len)
+	explicit DedicatedPool(unsigned int len = 8) : poolsize(len)
 	{
 		if (len > PoolMax || len < PoolMin)
 			FORMAT_WARNING("pool size is out of range [2, 32768]", len);
