@@ -166,7 +166,7 @@ public:
 		* Description: remove bind to thumbnail buffer
 		*/
 		pres->Return((void*)sf->NV12());
-		boost::lock_guard<boost::mutex> lock(mtx);
+		boost::lock_guard<boost::recursive_mutex> lock(mtx);
 		freefrms.push_back(sf);
 		busyfrms.erase(sf);
 
@@ -189,7 +189,7 @@ public:
 				/**
 				* Description: acquire frame
 				*/
-				boost::lock_guard<boost::mutex> lock(mtx);
+				boost::lock_guard<boost::recursive_mutex> lock(mtx);
 				if (freefrms.size())
 				{
 					/**
@@ -223,13 +223,13 @@ public:
 
 	inline unsigned int FreeSize()
 	{
-		boost::lock_guard<boost::mutex> lock(mtx);
+		boost::lock_guard<boost::recursive_mutex> lock(mtx);
 		return freefrms.size();
 	}
 
 	inline unsigned int BusySize()
 	{
-		boost::lock_guard<boost::mutex> lock(mtx);
+		boost::lock_guard<boost::recursive_mutex> lock(mtx);
 		return busyfrms.size();
 	}
 
@@ -241,7 +241,7 @@ private:
 	/**
 	* Description: raw ISmartFrame object pool
 	*/
-	boost::mutex							mtx;		/* pool lock */
+	boost::recursive_mutex							mtx;		/* pool lock */
 	unsigned int							totalsize;	/* pool max size */
 	std::vector<ISmartFrame*>				freefrms;	/* unused frames */
 	std::map<ISmartFrame*, unsigned int>	busyfrms;	/* save thread tid which correspond with same decoder */
@@ -358,7 +358,7 @@ public:
 
 	void Return(void *dev_ptr)
 	{
-		// boost::lock_guard<boost::mutex> lk(mtx);
+		boost::lock_guard<boost::recursive_mutex> lk(mtx);
 		freedevs.push_back(dev_ptr);
 	}
 
@@ -379,11 +379,12 @@ private:
 	{
 		((FrameBatchPipe*)user)->BatchPop(p, nlen);
 	}
+
 	void BatchPop(ISmartFramePtr *p, unsigned int nlen)
 	{
 		if (fbcb)
 		{
-			// boost::lock_guard<boost::mutex> lk(mtx);
+			boost::lock_guard<boost::recursive_mutex> lk(mtx);
 			if (freedevs.size())
 			{
 				fbcb(p, nlen, &freedevs[0], freedevs.size(), invoker);
@@ -420,7 +421,7 @@ private:
 	SmartPoolInterface *				sfpool;			/* smart frame pool */
 	FrameBatchRoutine					fbcb;			/* frame batch ready callback */
 	void *								invoker;		/* callback pointer */
-	boost::mutex						mtx;			/* lock for free device buffer vector */
+	boost::recursive_mutex						mtx;			/* lock for free device buffer vector */
 	vector<void*>						freedevs;		/* returned device pointers */
 
 #if (__cplusplus >= 201103L)

@@ -4,6 +4,7 @@
 #include <boost/foreach.hpp>
 #include <algorithm>
 #include <iostream>
+#include <list>
 #include <map>
 
 #define FORMAT_OUTPUT(level, log, ret)	std::cout<<"["<<level<<"] "<<log\
@@ -122,12 +123,20 @@ private:
 	/**
 	 * Description: swap buffers between two container
 	 */
-	std::map<unsigned int, unsigned char*> freelist;
+	// std::map<unsigned int, unsigned char*> freelist;
+	class FreeOnes
+	{
+	public:
+		unsigned char* buf;
+		unsigned int len;
+		FreeOnes(unsigned char*_buf, unsigned int _len) : buf(_buf), len(_len) {}
+	};
+	std::list<FreeOnes>	freelist;
 	std::map<unsigned char*, unsigned int> worklist;
-	boost::mutex	lmtx;
+	boost::recursive_mutex	lmtx;
 
 public:
-	explicit DedicatedPool(unsigned int len = 8) : poolsize(len)
+	explicit DedicatedPool(unsigned int len = 16) : poolsize(len)
 	{
 		if (len > PoolMax || len < PoolMin)
 			FORMAT_WARNING("pool size is out of range [2, 32768]", len);
@@ -137,13 +146,12 @@ public:
 
 	~DedicatedPool()
 	{
-		typedef std::map<unsigned int, unsigned char*>::value_type FreeBuf;
 		typedef std::map<unsigned char*, unsigned int>::value_type WorkBuf;
 
 		/**
 		 * Description: clean up both lists
 		 */
-		boost::lock_guard<boost::mutex> lock(lmtx);
+		boost::lock_guard<boost::recursive_mutex> lock(lmtx);
 
 		BOOST_FOREACH(WorkBuf &workbuf, worklist)
 		{
@@ -156,14 +164,13 @@ public:
 			}
 		}
 
-		BOOST_FOREACH(FreeBuf &freebuf, freelist)
+		BOOST_FOREACH(FreeOnes &freebuf, freelist)
 		{
 			unsigned char *buf = NULL;
-			if (freebuf.second)
+			if (freebuf.buf)
 			{
-				buf = freebuf.second;
-				FrameAllocator::Free(buf);
-				buf = NULL;
+				FrameAllocator::Free(freebuf.buf);
+				freebuf.buf = NULL;
 			}
 		}
 
@@ -179,22 +186,22 @@ public:
 		unsigned char *buf = NULL;
 		do 
 		{
-			boost::lock_guard<boost::mutex> lock(lmtx);
+			boost::lock_guard<boost::recursive_mutex> lock(lmtx);
 
 			/**
 			 * Description: find proper buffer in freelist
 			 */
-			for (std::map<unsigned int, unsigned char*>::iterator it = freelist.begin();
+			for (std::list<FreeOnes>::iterator it = freelist.begin();
 				it != freelist.end();
 				it ++)
 			{
 				/**
 				 * Description: find buffer in freelist
 				 */
-				if (it->first >= len)
+				if (it->len >= len)
 				{
-					buf = it->second;
-					worklist.insert(std::pair<unsigned char*, unsigned int>(it->second, it->first));
+					buf = it->buf;
+					worklist.insert(std::pair<unsigned char*, unsigned int>(it->buf, it->len));
 					freelist.erase(it);
 
 					break;
@@ -219,9 +226,8 @@ public:
 					/**
 					 * Description: no suitable free buffer, realloc the biggest one
 					 */
-					std::map<unsigned int, unsigned char*>::reverse_iterator it = freelist.rbegin();
-					buf = it->second;
-					buf = (unsigned char*)FrameAllocator::Realloc((unsigned char*)buf, len);
+					std::list<FreeOnes>::reverse_iterator it = freelist.rbegin();
+					buf = (unsigned char*)FrameAllocator::Realloc((unsigned char*)it->buf, len);
 
 					BOOST_ASSERT(buf);
 
@@ -250,7 +256,7 @@ public:
 
 	inline bool Free(unsigned char* buf)
 	{
-		boost::lock_guard<boost::mutex> lock(lmtx);
+		boost::lock_guard<boost::recursive_mutex> lock(lmtx);
 
 		std::map<unsigned char*, unsigned int>::iterator it = worklist.find(buf);
 		if (it == worklist.end())
@@ -264,7 +270,7 @@ public:
 			 * Description: return buffer to freelist
 			 */
 
-			freelist.insert(std::pair<unsigned int, unsigned char*>(it->second, it->first));
+			freelist.push_front(FreeOnes(it->first, it->second));
 			worklist.erase(it);
 		}
 

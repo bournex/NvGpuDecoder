@@ -67,54 +67,64 @@ namespace NvCodec
 		* Description: 
 		*/
 		NvDecoder(unsigned int devidx = 0, unsigned int queuelen = 8, bool map2host = false)
-			: cuCtx(NULL)
-			, cuCtxLock(NULL)
+			: cuCtxLock(NULL)
 			, cuParser(NULL)
 			, cuDecoder(NULL)
+			, dev(devidx)
 			, cWidth(0)
 			, cHeight(0)
-			, qlen(queuelen)
+			, qlen((queuelen*3)>>1)
 			, bMap2Host(map2host)
+			, devicepool(queuelen<<2)
+			, framepool((queuelen<<2))
+		{
+			int ret = Init();
+			if (ret) throw ret;
+		}
+
+		int Init()
 		{
 			int ret = 0;
 
 			if (!cuCtx)
 			{
-				if (ret = cuCtxCreate(&cuCtx, 0, devidx))
+				if (ret = cuCtxCreate(&cuCtx, 0, dev))
 				{
 					FORMAT_FATAL("create context failed", ret);
-					throw ret;
+					return ret;
 				}
 			}
 
 			if (!cuCtxLock && (ret = cuvidCtxLockCreate(&cuCtxLock, cuCtx)))
 			{
 				FORMAT_FATAL("create context lock failed", ret);
-				throw ret;
+				return ret;
 			}
 
 			/**
 			* Description: create video parser
 			*/
-			CUVIDPARSERPARAMS videoParserParameters			= {  };
+			CUVIDPARSERPARAMS videoParserParameters = {};
 			/* my sample only support h264 stream */
-			videoParserParameters.CodecType					= cudaVideoCodec_H264;
+			videoParserParameters.CodecType = cudaVideoCodec_H264;
 			/* stream cached length */
-			videoParserParameters.ulMaxNumDecodeSurfaces	= (qlen<<1);
+			videoParserParameters.ulMaxNumDecodeSurfaces = (qlen << 1);
 			/* delay for 1 */
-			videoParserParameters.ulMaxDisplayDelay			= 1;
+			videoParserParameters.ulMaxDisplayDelay = 1;
 			/* user data */
-			videoParserParameters.pUserData					= this;
+			videoParserParameters.pUserData = this;
 			/* callbacks */
-			videoParserParameters.pfnSequenceCallback		= HandleVideoSequenceProc;
-			videoParserParameters.pfnDecodePicture			= HandlePictureDecodeProc;
-			videoParserParameters.pfnDisplayPicture			= HandlePictureDisplayProc;
+			videoParserParameters.pfnSequenceCallback = HandleVideoSequenceProc;
+			videoParserParameters.pfnDecodePicture = HandlePictureDecodeProc;
+			videoParserParameters.pfnDisplayPicture = HandlePictureDisplayProc;
 
 			if (ret = cuvidCreateVideoParser(&cuParser, &videoParserParameters))
 			{
 				FORMAT_FATAL("create video parser failed", ret);
-				throw ret;
+				return ret;
 			}
+
+			return ret;
 		}
 
 		/**
@@ -124,8 +134,8 @@ namespace NvCodec
 		{
 			int ret = 0;
 
-			// boost::mutex::scoped_lock (qmtx);
-			boost::lock_guard<boost::mutex> lock(qmtx);
+			// boost::recursive_mutex::scoped_lock (qmtx);
+			boost::lock_guard<boost::recursive_mutex> lock(qmtx);
 			for (std::list<CuFrame>::iterator it = qpic.begin(); it != qpic.end(); it++)
 			{
 				if (ret = cuvidUnmapVideoFrame(cuDecoder, it->dev_frame))
@@ -189,8 +199,8 @@ namespace NvCodec
 		inline int GetFrame(CuFrame &pic)
 		{
 			{
-				// boost::mutex::scoped_lock(qmtx);
-				boost::lock_guard<boost::mutex> lock(qmtx);
+				// boost::recursive_mutex::scoped_lock(qmtx);
+				boost::lock_guard<boost::recursive_mutex> lock(qmtx);
 				if (qpic.size())
 				{
 					pic = qpic.front();
@@ -243,19 +253,13 @@ namespace NvCodec
 		{
 			int ret = 0;
 
-			// boost::mutex::scoped_lock (qmtx);
-			boost::lock_guard<boost::mutex> lock(qmtx);
+			// boost::recursive_mutex::scoped_lock (qmtx);
 
-			if (pic.dev_frame && (ret = cuvidUnmapVideoFrame(cuDecoder, pic.dev_frame)))
-			{
-				FORMAT_FATAL("unmap video frame failed", ret);
-				return false;
-			}
+			if (pic.dev_frame)
+				devicepool.Free((unsigned char *)pic.dev_frame);
 
 			if (pic.host_frame)
-			{
 				framepool.Free(pic.host_frame);
-			}
 
 			memset(&pic, 0, sizeof(pic));
 
@@ -285,6 +289,15 @@ namespace NvCodec
 		int HandleVideoSequence(CUVIDEOFORMAT *pVideoFormat)
 		{
 			int ret = 0;
+
+			if (!cuCtx)
+			{
+				if (ret = cuCtxCreate(&cuCtx, 0, dev))
+				{
+					FORMAT_FATAL("create context failed", ret);
+					return ret;
+				}
+			}
 
 			/**
 			 * Description: video sequence change
@@ -336,6 +349,7 @@ namespace NvCodec
 			/**
 			 * Description: creating decoder
 			 */
+			cuvidCtxLock(cuCtxLock, 0);
 			if (ret = cuvidCreateDecoder(&cuDecoder, &videoDecodeCreateInfo))
 			{
 				/**
@@ -344,6 +358,7 @@ namespace NvCodec
 				FORMAT_FATAL("create video decoder failed", ret);
 				cuDecoder = NULL;
 			}
+			cuvidCtxUnlock(cuCtxLock, 0);
 
 			return ret ? NV_FAILED : NV_OK;
 		}
@@ -393,20 +408,36 @@ namespace NvCodec
 				Sleep(5);
 			}
 
-			// std::cout << "frame timestamp " << pDispInfo->timestamp << std::endl;
-
 			do
 			{
 				/**
 				 * Description: ensure there's room for new picture
 				 */
 				{
-					// boost::mutex::scoped_lock(qmtx);
-					boost::lock_guard<boost::mutex> lock(qmtx);
+					// boost::recursive_mutex::scoped_lock(qmtx);
+					boost::lock_guard<boost::recursive_mutex> lock(qmtx);
 					if (qpic.size() < qlen)
 					{
 						/* have free space */
-						qpic.push_back(CuFrame(cWidth, cHeight, nPitch, pSrc, pDispInfo->timestamp));
+						CUdeviceptr devbuf = (CUdeviceptr)devicepool.Alloc((nPitch*cHeight * 3) >> 1);
+						BOOST_ASSERT(devbuf);
+
+						CUDA_MEMCPY2D m = { 0 };
+						m.srcMemoryType = CU_MEMORYTYPE_DEVICE;
+						m.srcDevice = pSrc;
+						m.srcPitch = nPitch;
+						m.dstMemoryType = CU_MEMORYTYPE_DEVICE;
+						m.dstDevice = (CUdeviceptr)devbuf;
+						m.dstPitch = nPitch;
+						m.WidthInBytes = cWidth;
+						m.Height = cHeight * 3 / 2;
+						if ((ret = cuMemcpy2D(&m)) != 0)
+						{
+							FORMAT_FATAL("copy device buffer to queue failed", ret);
+							break;
+						}
+
+						qpic.push_back(CuFrame(cWidth, cHeight, nPitch, devbuf, pDispInfo->timestamp));
 						break;
 					}
 					else if (qpic.size() == qlen)
@@ -420,9 +451,8 @@ namespace NvCodec
 						}
 						else if (QSPopLatest == qstrategy)
 						{
-							/* unmap current frame */
-							cuvidUnmapVideoFrame(cuDecoder, pSrc);
-							return NV_OK;
+							/* unmap current frame without queueing */
+							break;
 						}
 					}
 				}
@@ -431,14 +461,15 @@ namespace NvCodec
 
 			} while (1);
 
-			return ret ? NV_FAILED : NV_OK;
+			return cuvidUnmapVideoFrame(cuDecoder, pSrc);
 		}
 
 	private:
 		/**
 		 * Description: cuda objects
 		 */
-		CUcontext		cuCtx;		/* context handle */
+		int				dev;
+		static __declspec(thread) CUcontext	cuCtx;		/* context handle */
 		CUvideoctxlock	cuCtxLock;	/* context lock */
 		CUvideoparser	cuParser;	/* video parser handle */
 		CUvideodecoder	cuDecoder;	/* video decoder handle */
@@ -452,7 +483,7 @@ namespace NvCodec
 		/**
 		 * Description: decoded frames list
 		 */
-		boost::mutex				qmtx;
+		boost::recursive_mutex		qmtx;
 		unsigned int				qlen;		/* cached for decoded queue length */
 		std::list<CuFrame>			qpic;		/* cached for decoded nv12 data */
 
@@ -461,7 +492,9 @@ namespace NvCodec
 		 */
 		bool		bMap2Host;
 		HostPool	framepool;	/* RAM pool for frames */
+		DevicePool	devicepool;	/* VRAM pool for frames */
 	};
+	CUcontext __declspec(thread) NvDecoder::cuCtx = 0;
 
 	int CUDAAPI NvDecoder::HandleVideoSequenceProc(void *p, CUVIDEOFORMAT *pVideoFormat)
 	{return ((NvDecoder*)p)->HandleVideoSequence(pVideoFormat);}

@@ -19,9 +19,10 @@ extern "C"
 
 using namespace std;
 
-#define ALIGNED_SIZE	4
-#define AVFRAME2CUFRAME(avf, cuf)	\
-	cuf.host_frame	= (unsigned char*)avf->data;\
+#define ALIGNED_SIZE	1
+#define AVFRAME2CUFRAME(cuf, avf)	\
+	cuf.host_frame	= (unsigned char*)avf->data[0];\
+	cuf.host_pitch	= avf->linesize[0];\
 	cuf.w			= avf->width;\
 	cuf.h			= avf->height;\
 	cuf.timestamp	= avf->best_effort_timestamp;
@@ -47,7 +48,7 @@ namespace FFCodec
 				AVFrame *buf = NULL;
 				do
 				{
-					boost::lock_guard<boost::mutex> lk(mtx);
+					boost::lock_guard<boost::recursive_mutex> lk(mtx);
 
 					/**
 					* Description: find proper buffer in freelist
@@ -62,7 +63,7 @@ namespace FFCodec
 						if (((*it)->width * (*it)->height) >= (width * height))
 						{
 							buf = *it;
-							busylist.insert(std::pair<void*, AVFrame*>(buf->data, buf));
+							busylist.insert(std::pair<void*, AVFrame*>(buf->data[0], buf));
 							freelist.erase(it);
 
 							break;
@@ -71,7 +72,7 @@ namespace FFCodec
 
 					if (!buf)
 					{
-						if ((freelist.size() + busylist.size()) < 1024)
+						if ((freelist.size() + busylist.size()) < 32)
 						{
 							/**
 							* Description: no proper size buffer, alloc heap memory
@@ -84,7 +85,7 @@ namespace FFCodec
 									(unsigned char *)av_malloc(av_image_get_buffer_size(AV_PIX_FMT_NV12, width, height, ALIGNED_SIZE)),
 									AV_PIX_FMT_NV12, width, height, ALIGNED_SIZE);
 
-								busylist.insert(std::pair<void*, AVFrame*>(buf->data, buf));
+								busylist.insert(std::pair<void*, AVFrame*>(buf->data[0], buf));
 							}
 						}
 						else if (freelist.size())
@@ -110,7 +111,7 @@ namespace FFCodec
 							/**
 							* Description: enqueue worklist, dequeue freelist
 							*/
-							busylist.insert(std::pair<void*, AVFrame*>(buf->data, buf));
+							busylist.insert(std::pair<void*, AVFrame*>(buf->data[0], buf));
 							freelist.erase(it.base());
 						}
 						else
@@ -132,7 +133,7 @@ namespace FFCodec
 
 			bool Free(void* frame)
 			{
-				boost::lock_guard<boost::mutex> lk(mtx);
+				boost::lock_guard<boost::recursive_mutex> lk(mtx);
 
 				std::map<void*, AVFrame*>::iterator it = busylist.find(frame);
 				if (it == busylist.end())
@@ -154,12 +155,12 @@ namespace FFCodec
 			}
 
 		private:
-			boost::mutex			mtx;
+			boost::recursive_mutex			mtx;
 			list<AVFrame*>			freelist;
 			map<void*, AVFrame*>	busylist;
 		};
 
-		FFMpegCodec() : cuCtx(NULL), cuCtxLock(NULL)
+		FFMpegCodec() : cuCtx(NULL), cuCtxLock(NULL), pFrame(NULL), devpool(32)
 		{
 			pCodecCtx = avcodec_alloc_context3(NULL);
 			if (pCodecCtx == NULL)
@@ -234,11 +235,6 @@ namespace FFCodec
 			}
 
 			/**
-			* Description: alloc decode frame pointer
-			*/
-			pFrame = av_frame_alloc();
-
-			/**
 			* Description: create scale object
 			*/
 			img_convert_ctx = sws_getContext(pCodecCtx->width, pCodecCtx->height, pCodecCtx->pix_fmt,
@@ -258,11 +254,21 @@ namespace FFCodec
 				return false;
 			}
 
+			if (!pFrame)
+			{
+				/**
+				 * Description: alloc decode frame pointer
+				 */
+				pFrame = av_frame_alloc();
+			}
+
 			/**
 			 * Description: alloc NV12 scaled buffer
 			 */
-			AVFrame* avf = avfpool.Alloc(pFrame->width, pFrame->height);
-			if (AVERROR(EAGAIN) == avcodec_receive_frame(pCodecCtx, avf))
+			AVFrame* avf = avfpool.Alloc(pCodecCtx->width, pCodecCtx->height);
+			avf->width = pCodecCtx->width;
+			avf->height = pCodecCtx->height;
+			if (AVERROR(EAGAIN) == avcodec_receive_frame(pCodecCtx, pFrame))
 			{
 				avfpool.Free(avf->data);
 				return false;
@@ -271,8 +277,9 @@ namespace FFCodec
 			sws_scale(img_convert_ctx, (const unsigned char* const*)pFrame->data, pFrame->linesize, 0, pCodecCtx->height,
 				avf->data, avf->linesize);
 
-			boost::lock_guard<boost::mutex> lk(mtx);
+			boost::lock_guard<boost::recursive_mutex> lk(mtx);
 			avfq.push_back(avf);
+			
 
 			return true;
 		}
@@ -280,50 +287,22 @@ namespace FFCodec
 
 		virtual int GetFrame(NvCodec::CuFrame &pic)
 		{
-			boost::lock_guard<boost::mutex> lk(mtx);
+			boost::lock_guard<boost::recursive_mutex> lk(mtx);
 
 			if (avfq.size())
 			{
 				AVFrame *avf = avfq.front();
-				AVFRAME2CUFRAME(avf, pic);
+				AVFRAME2CUFRAME(pic, avf);
 
-				static int index = 0;
-				char szName[512] = { 0 };
-				sprintf(szName, "%d.yuv", index++);
-				FILE *pf = fopen(szName, "wb");
-				fwrite(avf->data[0], 1, (avf->width * avf->height), pf);
-				fwrite(avf->data[1], 1, (avf->width * avf->height)>>2, pf);
-				fwrite(avf->data[2], 1, (avf->width * avf->height)>>2, pf);
-				fclose(pf);
-
-				pic.dev_frame = (CUdeviceptr)devpool.Alloc(GPU_NV12_CALC(avf->width, avf->height));
-				pic.dev_pitch = GPU_WIDTH_ALIGN(avf->width);
-
-				//CUDA_MEMCPY2D d2h = { 0 };
-				//d2h.srcMemoryType = CU_MEMORYTYPE_HOST;
-				//d2h.dstMemoryType = CU_MEMORYTYPE_DEVICE;
-				//d2h.srcHost = pic.host_frame;
-				//// d2h.dstHost = (void*)pic.dev_frame;
-				//d2h.dstDevice = (CUdeviceptr)pic.host_frame;
-				//d2h.srcPitch = pic.w;
-				//d2h.dstPitch = pic.dev_pitch;
-				//d2h.WidthInBytes = pic.w;
-				//d2h.Height = pic.h + (pic.h >> 1);
+				pic.dev_frame = (CUdeviceptr)devpool.Alloc(CPU_NV12_CALC(avf->width, avf->height));
+				pic.dev_pitch = CPU_WIDTH_ALIGN(avf->width);
 
 				int ret = 0;
+				ret = cuMemcpyHtoD(pic.dev_frame, pic.host_frame, (avf->width * avf->height * 3) >> 1);
 
-				//cuvidCtxLock(cuCtxLock, 0);
-				///**
-				//* Description: copy to host buffer safety
-				//*/
-				//if (ret = cuMemcpy2D(&d2h))
-				//{
-				//	FORMAT_WARNING("copy to host failed", ret);
-				//}
-				//cuvidCtxUnlock(cuCtxLock, 0);
-
+				dev2host.insert(std::pair<void*, void*>((void*)pic.dev_frame, pic.host_frame));
 				avfq.pop_front();
-				return 0;
+				return ret;
 			}
 
 			return -1;
@@ -331,19 +310,23 @@ namespace FFCodec
 
 		virtual bool PutFrame(NvCodec::CuFrame &pic)
 		{
-			BOOST_ASSERT(pic.host_frame);
+			BOOST_ASSERT(pic.dev_frame);
 
-			boost::lock_guard<boost::mutex> lk(mtx);
-			return avfpool.Free(pic.host_frame);
+			std::map<void*, void*>::iterator it = dev2host.find((void*)pic.dev_frame);
+			if (it == dev2host.end()) return false;
+			void *p = it->second;
+			dev2host.erase(it);
+			return (devpool.Free((unsigned char*)pic.dev_frame) && avfpool.Free(p));
 		}
 
 	private:
 		bool				bplaying;
 		void *				usr;
 
-		boost::mutex		mtx;
+		boost::recursive_mutex		mtx;
 		FFCodecPool			avfpool;
 		list<AVFrame*>		avfq;
+		std::map<void*, void*> dev2host;
 		CUcontext			cuCtx;		/* context handle */
 		CUvideoctxlock		cuCtxLock;	/* context lock */
 

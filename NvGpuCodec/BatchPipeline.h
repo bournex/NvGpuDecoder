@@ -20,7 +20,7 @@ private:
 	{
 	private:
 		list<ISmartFramePtr>	frames;
-		boost::mutex			mtx;
+		boost::recursive_mutex			mtx;
 	public:
 		PipeQueue(){}
 		~PipeQueue(){ 
@@ -29,12 +29,12 @@ private:
 			mtx.destroy();
 		}
 		void Push(ISmartFramePtr frame) { 
-			boost::lock_guard<boost::mutex> lock(mtx);
+			boost::lock_guard<boost::recursive_mutex> lock(mtx);
 			frames.push_back(frame); 
 		}
 		ISmartFramePtr Pop() { 
 
-			boost::lock_guard<boost::mutex> lock(mtx);
+			boost::lock_guard<boost::recursive_mutex> lock(mtx);
 			if (frames.size())
 			{
 				ISmartFramePtr p = frames.front();

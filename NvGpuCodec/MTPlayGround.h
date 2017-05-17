@@ -18,7 +18,7 @@ private:
 	PlayWithFrame		playcb;
 	void *				invoker;
 	FrameBatchPipe		batchpipe;
-	boost::mutex		mtx;
+	boost::recursive_mutex		mtx;
 	std::map<void*, BaseCodec*> mpp;
 
 public:
@@ -74,7 +74,7 @@ public:
 		{
 			for (int i = 0; i < explen; i++)
 			{
-				// boost::lock_guard<boost::mutex> lk(mtx);
+				boost::lock_guard<boost::recursive_mutex> lk(mtx);
 				std::map<void*, BaseCodec*>::iterator it = mpp.find(expire[i]);
 				if (it != mpp.end())
 				{
@@ -106,7 +106,7 @@ public:
 			 * Description: raw h264 file
 			 */
 			NvCodec::NvCodecInit();
-			decoder.reset(new NvCodec::NvDecoder(0, 16));
+			decoder.reset(new NvCodec::NvDecoder(0, 8));
 			media.reset(new NvCodec::NvMediaSource(p.string(), decoder.get()));
 		}
 		else if (p.extension() == boost::filesystem::path(".mbf"))

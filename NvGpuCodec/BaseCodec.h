@@ -12,6 +12,7 @@ protected:
 	boost::atomic_int32_t		qstrategy;	/* queue control strategy */
 
 public:
+	virtual int		Init(){ return 0; };
 	virtual bool	InputStream(unsigned char* pStream, unsigned int nSize) = 0;
 	virtual int		GetFrame(NvCodec::CuFrame &pic)							= 0;
 	virtual bool	PutFrame(NvCodec::CuFrame &pic)							= 0;

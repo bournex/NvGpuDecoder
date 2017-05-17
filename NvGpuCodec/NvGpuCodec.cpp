@@ -21,6 +21,7 @@ void OnBatchData(ISmartFramePtr *batch, unsigned int len, void *invoker)
 	cout << "batch index : " << idx++ << endl;
 	for (int i = 0; i < len; i++)
 	{
+		ISmartFramePtr frame(batch[i]);
 		cout << batch[i]->Tid() << endl;
 	}
 }
