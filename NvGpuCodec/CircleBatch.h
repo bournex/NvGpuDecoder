@@ -9,7 +9,7 @@ using namespace std;
 * Description: thread-safe circle queue
 */
 
-template<class T, unsigned int batch_size = 8, unsigned int batch_cnt = 2 >
+template<class T, unsigned int batch_size = 8, unsigned int batch_cnt = 4 >
 class circle_batch
 {
 public:
@@ -109,7 +109,7 @@ public:
 			if (_bcb)
 			{
 				_bcb(&_swap[0], _batch_size, _cbv);
-				//_swap.clear();
+				_swap.clear();
 				_swap.resize(_batch_size);
 			}
 			return _batch_size;
@@ -137,7 +137,7 @@ public:
 				if (_bcb)
 				{
 					_bcb(&_swap[0], pos, _cbv);
-					//_swap.clear();
+					_swap.clear();
 					_swap.resize(_batch_size);
 				}
 				return pos;

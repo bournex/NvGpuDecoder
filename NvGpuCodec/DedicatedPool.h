@@ -6,6 +6,7 @@
 #include <iostream>
 #include <list>
 #include <map>
+#include "cuda_runtime_api.h"
 
 #define FORMAT_OUTPUT(level, log, ret)	std::cout<<"["<<level<<"] "<<log\
 	<<". err("<<ret<<")"<<std::endl;
@@ -23,11 +24,12 @@
 
 /* pool size bound definition */
 const unsigned int PoolMax = (1<<16);	/* 65536 */
-const unsigned int PoolMin = (1<<1);	/* 2 */
+const unsigned int PoolMin = (1 << 1);	/* 2 */
 
 /* calculate bounded pool size */
-#define BOUNDED_POOLSIZE(poolsize)	poolsize = \
-	(std::min(std::max(PoolMin, poolsize), PoolMax))
+#define BOUNDED_POOLSIZE(poolsize)	\
+	poolsize = ((PoolMin > poolsize) ? PoolMin : poolsize);\
+	poolsize = ((PoolMax > poolsize) ? poolsize : PoolMax);
 
 /**
  * Description: host RAM allocator
@@ -69,9 +71,9 @@ public:
 		BOOST_ASSERT(len);
 
 		int ret = 0;
-		CUdeviceptr p;
+		void * p;
 
-		if (ret = cuMemAlloc(&p, len))
+		if (ret = cudaMalloc((void**)&p, len))
 			FORMAT_FATAL("alloc device buffer failed", ret);
 
 		return (void*)p;
@@ -83,14 +85,14 @@ public:
 		BOOST_ASSERT(len);
 
 		int ret = 0;
-		if (ret = cuMemFree((CUdeviceptr)p))
+		if (ret = cudaFree(p))
 		{
 			FORMAT_FATAL("free device buffer failed", ret);
 			return NULL;
 		}
 
 		p = NULL;
-		if (ret = cuMemAlloc((CUdeviceptr*)&p, len))
+		if (ret = cudaMalloc((void**)&p, len))
 		{
 			FORMAT_FATAL("re-alloc device buffer failed", ret);
 			return NULL;
@@ -104,7 +106,7 @@ public:
 		BOOST_ASSERT(p);
 
 		int ret = 0;
-		if (ret = cuMemFree((CUdeviceptr)p))
+		if (ret = cudaFree(p))
 		{
 			FORMAT_FATAL("free device buffer failed", ret);
 		}
@@ -118,7 +120,7 @@ private:
 	/**
 	 * Description: pool size
 	 */
-	unsigned int poolsize;
+	volatile unsigned int poolsize;
 
 	/**
 	 * Description: swap buffers between two container
@@ -136,7 +138,7 @@ private:
 	boost::recursive_mutex	lmtx;
 
 public:
-	explicit DedicatedPool(unsigned int len = 16) : poolsize(len)
+	explicit DedicatedPool(unsigned int len = 32) : poolsize(len)
 	{
 		if (len > PoolMax || len < PoolMin)
 			FORMAT_WARNING("pool size is out of range [2, 32768]", len);
@@ -186,71 +188,75 @@ public:
 		unsigned char *buf = NULL;
 		do 
 		{
-			boost::lock_guard<boost::recursive_mutex> lock(lmtx);
-
 			/**
 			 * Description: find proper buffer in freelist
 			 */
-			for (std::list<FreeOnes>::iterator it = freelist.begin();
-				it != freelist.end();
-				it ++)
+			if (lmtx.try_lock())
 			{
-				/**
-				 * Description: find buffer in freelist
-				 */
-				if (it->len >= len)
-				{
-					buf = it->buf;
-					worklist.insert(std::pair<unsigned char*, unsigned int>(it->buf, it->len));
-					freelist.erase(it);
-
-					break;
-				}
-			}
-
-			if (!buf)
-			{
-				if ((freelist.size() + worklist.size()) < poolsize)
+				for (std::list<FreeOnes>::iterator it = freelist.begin();
+					it != freelist.end();
+					it++)
 				{
 					/**
-					 * Description: no proper size buffer, alloc heap memory
-					 */
-					if (!buf)
+					* Description: find buffer in freelist
+					*/
+					if (it->len >= len)
 					{
-						buf = (unsigned char*)FrameAllocator::Malloc(len);
-						worklist.insert(std::pair<unsigned char*, unsigned int>(buf, len));
+						buf = it->buf;
+						worklist.insert(std::pair<unsigned char*, unsigned int>(it->buf, it->len));
+						freelist.erase(it);
+
+						break;
 					}
 				}
-				else if (freelist.size())
-				{
-					/**
-					 * Description: no suitable free buffer, realloc the biggest one
-					 */
-					std::list<FreeOnes>::reverse_iterator it = freelist.rbegin();
-					buf = (unsigned char*)FrameAllocator::Realloc((unsigned char*)it->buf, len);
 
-					BOOST_ASSERT(buf);
-
-					/**
-					 * Description: enqueue worklist, dequeue freelist
-					 */
-					worklist.insert(std::pair<unsigned char*, unsigned int>(buf, len));
-					freelist.erase(it.base());
-				}
-				else
+				if (!buf)
 				{
-					/**
-					 * Description: worklist full, wait for next around,[TODO liuxf] reduce cpu usage
-					 */
+					if ((freelist.size() + worklist.size()) < poolsize)
+					{
+						/**
+						* Description: no proper size buffer, alloc heap memory
+						*/
+						if (!buf)
+						{
+							buf = (unsigned char*)FrameAllocator::Malloc(len);
+							worklist.insert(std::pair<unsigned char*, unsigned int>(buf, len));
+						}
+					}
+					else if (freelist.size())
+					{
+						/**
+						* Description: no suitable free buffer, realloc the biggest one
+						*/
+						std::list<FreeOnes>::reverse_iterator it = freelist.rbegin();
+						buf = (unsigned char*)FrameAllocator::Realloc((unsigned char*)it->buf, len);
+
+						BOOST_ASSERT(buf);
+
+						/**
+						* Description: enqueue worklist, dequeue freelist
+						*/
+						worklist.insert(std::pair<unsigned char*, unsigned int>(buf, len));
+						freelist.erase(it.base());
+					}
+					else
+					{
+						/**
+						* Description: worklist full, wait for next around,[TODO liuxf] reduce cpu usage
+						*/
+					}
 				}
+				lmtx.unlock();
 			}
 
+			boost::this_thread::sleep(boost::posix_time::microseconds(1500));
 			/**
 			 * Description: try until get suitable buffer
 			 */
 
 		} while (!buf);
 
+		//printf("[statistics] tid = %d, alloc = %d\n", GetCurrentThreadId(), ++aidx);
 		return buf;
 	}
 
@@ -269,13 +275,23 @@ public:
 			/**
 			 * Description: return buffer to freelist
 			 */
-
 			freelist.push_front(FreeOnes(it->first, it->second));
 			worklist.erase(it);
 		}
 
 		return true;
 	}
+
+	inline unsigned int dilation(unsigned int addition)
+	{
+		/**
+		 * Description: dilate addition size
+		 */
+		return poolsize += addition;
+	}
+
+	boost::atomic_uint32_t aidx = 0;
+	boost::atomic_uint32_t fidx = 0;
 };
 
 typedef DedicatedPool<CpuAllocator>		HostPool;

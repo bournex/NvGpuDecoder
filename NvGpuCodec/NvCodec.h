@@ -5,6 +5,7 @@
 #include <boost/thread/mutex.hpp>
 #include <boost/thread.hpp>
 #include <boost/atomic.hpp>
+#include "cuda_runtime_api.h"
 #include <nvcuvid.h>
 #include <string>
 #include <list>
@@ -66,7 +67,7 @@ namespace NvCodec
 		/**
 		* Description: 
 		*/
-		NvDecoder(unsigned int devidx = 0, unsigned int queuelen = 8, bool map2host = false)
+		NvDecoder(unsigned int devidx = 0, unsigned int queuelen = 8, DevicePool* devpool = NULL, bool map2host = false)
 			: cuCtxLock(NULL)
 			, cuParser(NULL)
 			, cuDecoder(NULL)
@@ -75,7 +76,8 @@ namespace NvCodec
 			, cHeight(0)
 			, qlen((queuelen*3)>>1)
 			, bMap2Host(map2host)
-			, devicepool(queuelen<<2)
+			, bLocalPool((devpool == NULL) ? true : false)
+			, devicepool(devpool)
 			, framepool((queuelen<<2))
 		{
 			int ret = Init();
@@ -85,6 +87,11 @@ namespace NvCodec
 		int Init()
 		{
 			int ret = 0;
+
+			if (!devicepool)
+			{
+				devicepool = new DevicePool((qlen*3)>>1);
+			}
 
 			if (!cuCtx)
 			{
@@ -130,15 +137,18 @@ namespace NvCodec
 		/**
 		* Description: 
 		*/
-		~NvDecoder()
+		virtual ~NvDecoder()
 		{
 			int ret = 0;
 
-			// boost::recursive_mutex::scoped_lock (qmtx);
 			boost::lock_guard<boost::recursive_mutex> lock(qmtx);
 			for (std::list<CuFrame>::iterator it = qpic.begin(); it != qpic.end(); it++)
 			{
-				if (ret = cuvidUnmapVideoFrame(cuDecoder, it->dev_frame))
+#ifdef WIN32
+				if (ret = cuvidUnmapVideoFrame(cuDecoder, (unsigned int)it->dev_frame))
+#else
+				if (ret = cuvidUnmapVideoFrame(cuDecoder, (unsigned long long)it->dev_frame))
+#endif
 				{
 					FORMAT_WARNING("unmap video frame failed", ret);
 				}
@@ -160,6 +170,12 @@ namespace NvCodec
 			{
 				FORMAT_FATAL("destroy context lock failed", ret);
 				throw ret;
+			}
+
+			if (bLocalPool)
+			{
+				delete devicepool;
+				devicepool = NULL;
 			}
 		}
 
@@ -199,8 +215,7 @@ namespace NvCodec
 		inline int GetFrame(CuFrame &pic)
 		{
 			{
-				// boost::recursive_mutex::scoped_lock(qmtx);
-				boost::lock_guard<boost::recursive_mutex> lock(qmtx);
+				boost::lock_guard<boost::recursive_mutex> lk(qmtx);
 				if (qpic.size())
 				{
 					pic = qpic.front();
@@ -222,28 +237,12 @@ namespace NvCodec
 
 				BOOST_ASSERT(pic.host_frame);
 
-				CUDA_MEMCPY2D d2h = { 0 };
-				d2h.srcMemoryType = CU_MEMORYTYPE_DEVICE;
-				d2h.dstMemoryType = CU_MEMORYTYPE_HOST;
-				d2h.srcDevice = pic.dev_frame;
-				d2h.dstHost = pic.host_frame;
-				d2h.dstDevice = (CUdeviceptr)pic.host_frame;
-				d2h.srcPitch = pic.dev_pitch;
-				d2h.dstPitch = pic.w;
-				d2h.WidthInBytes = pic.w;
-				d2h.Height = pic.h + (pic.h >> 1);
-
-				int ret = 0;
-
-				cuvidCtxLock(cuCtxLock, 0);
-				/**
-				 * Description: copy to host buffer safety
-				 */
-				if (ret = cuMemcpy2D(&d2h))
+				int ret = cudaMemcpy(pic.host_frame, pic.dev_frame, pic.dev_pitch * pic.h + ((pic.dev_pitch * pic.h) >> 1), cudaMemcpyDeviceToHost);
+				if (ret)
 				{
-					FORMAT_WARNING("copy to host failed", ret);
+					FORMAT_FATAL("copy frame from device to host failed", ret);
+					return -1;
 				}
-				cuvidCtxUnlock(cuCtxLock, 0);
 			}
 
 			return 0;
@@ -253,10 +252,10 @@ namespace NvCodec
 		{
 			int ret = 0;
 
-			// boost::recursive_mutex::scoped_lock (qmtx);
+			// boost::lock_guard<boost::recursive_mutex> lk(qmtx);
 
 			if (pic.dev_frame)
-				devicepool.Free((unsigned char *)pic.dev_frame);
+				devicepool->Free((unsigned char *)pic.dev_frame);
 
 			if (pic.host_frame)
 				framepool.Free(pic.host_frame);
@@ -290,11 +289,23 @@ namespace NvCodec
 		{
 			int ret = 0;
 
-			if (!cuCtx)
+			CUcontext ctxOld;
+			cuCtxPopCurrent(&ctxOld);
+
+			if (!ctxOld)
 			{
-				if (ret = cuCtxCreate(&cuCtx, 0, dev))
+				if (!cuCtx)
 				{
-					FORMAT_FATAL("create context failed", ret);
+					if (ret = cuCtxCreate(&cuCtx, 0, dev))
+					{
+						FORMAT_FATAL("create context failed", ret);
+						return ret;
+					}
+				}
+
+				if ((ret = cuCtxPushCurrent(cuCtx)) != 0)
+				{
+					FORMAT_FATAL("push context failed", ret);
 					return ret;
 				}
 			}
@@ -330,13 +341,13 @@ namespace NvCodec
 			videoDecodeCreateInfo.ulTargetHeight		= cHeight	= pVideoFormat->coded_height;
 
 			/* inner decoded picture cache buffer */
-			videoDecodeCreateInfo.ulNumOutputSurfaces	= (qlen);
+			videoDecodeCreateInfo.ulNumOutputSurfaces	= (1);
 
 			/* using dedicated video engines */
 			videoDecodeCreateInfo.ulCreationFlags		= cudaVideoCreate_PreferCUVID;
 
 			/* inner decoding cache buffer */
-			videoDecodeCreateInfo.ulNumDecodeSurfaces	= (qlen<<1);
+			videoDecodeCreateInfo.ulNumDecodeSurfaces	= (12);
 
 			/* context lock */
 			videoDecodeCreateInfo.vidLock				= cuCtxLock;
@@ -349,7 +360,6 @@ namespace NvCodec
 			/**
 			 * Description: creating decoder
 			 */
-			cuvidCtxLock(cuCtxLock, 0);
 			if (ret = cuvidCreateDecoder(&cuDecoder, &videoDecodeCreateInfo))
 			{
 				/**
@@ -358,7 +368,6 @@ namespace NvCodec
 				FORMAT_FATAL("create video decoder failed", ret);
 				cuDecoder = NULL;
 			}
-			cuvidCtxUnlock(cuCtxLock, 0);
 
 			return ret ? NV_FAILED : NV_OK;
 		}
@@ -370,14 +379,17 @@ namespace NvCodec
 		{
 			if (!cuDecoder)
 			{
-				FORMAT_WARNING("video decoder not created", -1);
+				FORMAT_WARNING("video decoder not created yet", -1);
 				return NV_FAILED;
 			}
 
-			int ret = 0;
-			if (ret = cuvidDecodePicture(cuDecoder, pPicParams))
+			cuvidCtxLock(cuCtxLock, 0);
+			int ret = cuvidDecodePicture(cuDecoder, pPicParams);
+			cuvidCtxUnlock(cuCtxLock, 0);
+
+			if (ret)
 			{
-				FORMAT_FATAL("create video decoder failed", ret);
+				FORMAT_FATAL("decode picture failed", ret);
 			}
 
 			return ret ? NV_FAILED : NV_OK;
@@ -405,8 +417,10 @@ namespace NvCodec
 			while (ret = cuvidMapVideoFrame(cuDecoder, pDispInfo->picture_index, &pSrc,
 				&nPitch, &videoProcessingParameters))
 			{
-				Sleep(5);
+				boost::this_thread::sleep(boost::posix_time::microseconds(100));
 			}
+
+			// return cuvidUnmapVideoFrame(cuDecoder, pSrc);
 
 			do
 			{
@@ -414,52 +428,65 @@ namespace NvCodec
 				 * Description: ensure there's room for new picture
 				 */
 				{
-					// boost::recursive_mutex::scoped_lock(qmtx);
-					boost::lock_guard<boost::recursive_mutex> lock(qmtx);
-					if (qpic.size() < qlen)
+					if (qmtx.try_lock())
 					{
-						/* have free space */
-						CUdeviceptr devbuf = (CUdeviceptr)devicepool.Alloc((nPitch*cHeight * 3) >> 1);
-						BOOST_ASSERT(devbuf);
-
-						CUDA_MEMCPY2D m = { 0 };
-						m.srcMemoryType = CU_MEMORYTYPE_DEVICE;
-						m.srcDevice = pSrc;
-						m.srcPitch = nPitch;
-						m.dstMemoryType = CU_MEMORYTYPE_DEVICE;
-						m.dstDevice = (CUdeviceptr)devbuf;
-						m.dstPitch = nPitch;
-						m.WidthInBytes = cWidth;
-						m.Height = cHeight * 3 / 2;
-						if ((ret = cuMemcpy2D(&m)) != 0)
+						if (qpic.size() < qlen)
 						{
-							FORMAT_FATAL("copy device buffer to queue failed", ret);
+							/* have free space */
+							void* devbuf = devicepool->Alloc((nPitch*cHeight * 3) >> 1);
+							BOOST_ASSERT(devbuf);
+
+							cuvidCtxLock(cuCtxLock, 0);
+							ret = cudaMemcpy((void*)devbuf, (void*)pSrc, (nPitch * cHeight * 3) >> 1, cudaMemcpyDeviceToDevice);
+							cuvidCtxUnlock(cuCtxLock, 0);
+							if (ret)
+							{
+								// FORMAT_FATAL("copy decoded frame failed", ret);
+								// printf("0x%08x --- FAIL\n", devbuf);
+							}
+							else
+							{
+								// printf("0x%08x --- SUCCESS\n", devbuf);
+							}
+
+							qpic.push_back(CuFrame(cWidth, cHeight, nPitch, devbuf, pDispInfo->timestamp));
+							qmtx.unlock();
 							break;
 						}
+						else if (qpic.size() == qlen)
+						{
+							/* queue full */
+							if (QSPopEarliest == qstrategy)
+							{
+								void* devbuf = devicepool->Alloc((nPitch*cHeight * 3) >> 1);
+								BOOST_ASSERT(devbuf);
 
-						qpic.push_back(CuFrame(cWidth, cHeight, nPitch, devbuf, pDispInfo->timestamp));
-						break;
-					}
-					else if (qpic.size() == qlen)
-					{
-						/* queue full */
-						if (QSPopEarliest == qstrategy)
-						{
-							qpic.pop_front();
-							qpic.push_back(CuFrame(cWidth, cHeight, nPitch, pSrc, pDispInfo->timestamp));
-							break;
-						}
-						else if (QSPopLatest == qstrategy)
-						{
-							/* unmap current frame without queueing */
-							break;
+								ret = cudaMemcpy((void*)devbuf, (void*)pSrc, (nPitch * cHeight * 3) >> 1, cudaMemcpyDeviceToDevice);
+								if (ret)
+								{
+									FORMAT_FATAL("copy decoded frame failed", ret);
+								}
+
+								qpic.pop_front();
+								qpic.push_back(CuFrame(cWidth, cHeight, nPitch, devbuf, pDispInfo->timestamp));
+								qmtx.unlock();
+								break;
+							}
+							else if (QSPopLatest == qstrategy)
+							{
+								/* unmap current frame without queueing */
+								qmtx.unlock();
+								break;
+							}
+							qmtx.unlock();
 						}
 					}
 				}
 
-				boost::this_thread::sleep(boost::posix_time::milliseconds(20));
+				boost::this_thread::sleep(boost::posix_time::microseconds(1500));
 
 			} while (1);
+
 
 			return cuvidUnmapVideoFrame(cuDecoder, pSrc);
 		}
@@ -469,7 +496,7 @@ namespace NvCodec
 		 * Description: cuda objects
 		 */
 		int				dev;
-		static __declspec(thread) CUcontext	cuCtx;		/* context handle */
+		static CUcontext cuCtx;		/* context handle */
 		CUvideoctxlock	cuCtxLock;	/* context lock */
 		CUvideoparser	cuParser;	/* video parser handle */
 		CUvideodecoder	cuDecoder;	/* video decoder handle */
@@ -492,9 +519,11 @@ namespace NvCodec
 		 */
 		bool		bMap2Host;
 		HostPool	framepool;	/* RAM pool for frames */
-		DevicePool	devicepool;	/* VRAM pool for frames */
+		bool		bLocalPool;
+		DevicePool	*devicepool;	/* VRAM pool for frames */
 	};
-	CUcontext __declspec(thread) NvDecoder::cuCtx = 0;
+	CUcontext NvDecoder::cuCtx = NULL;
+	// CUcontext __declspec(thread) NvDecoder::cuCtx = 0;
 
 	int CUDAAPI NvDecoder::HandleVideoSequenceProc(void *p, CUVIDEOFORMAT *pVideoFormat)
 	{return ((NvDecoder*)p)->HandleVideoSequence(pVideoFormat);}

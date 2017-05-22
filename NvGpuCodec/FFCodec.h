@@ -160,8 +160,15 @@ namespace FFCodec
 			map<void*, AVFrame*>	busylist;
 		};
 
-		FFMpegCodec() : cuCtx(NULL), cuCtxLock(NULL), pFrame(NULL), devpool(32)
+		FFMpegCodec(DevicePool *devicepool = NULL) : cuCtx(NULL), cuCtxLock(NULL), pFrame(NULL), devpool(devicepool), bLocalPool(false)
 		{
+			if (!devpool)
+			{
+				bLocalPool = true;
+				devpool = new DevicePool(32);
+			}
+
+
 			pCodecCtx = avcodec_alloc_context3(NULL);
 			if (pCodecCtx == NULL)
 			{
@@ -208,6 +215,12 @@ namespace FFCodec
 			* Description: free context
 			*/
 			avcodec_close(pCodecCtx);
+
+			if (bLocalPool)
+			{
+				delete devpool;
+				devpool = NULL;
+			}
 		}
 
 		void Create(AVCodecParameters *pCodecPara)
@@ -294,11 +307,17 @@ namespace FFCodec
 				AVFrame *avf = avfq.front();
 				AVFRAME2CUFRAME(pic, avf);
 
-				pic.dev_frame = (CUdeviceptr)devpool.Alloc(CPU_NV12_CALC(avf->width, avf->height));
+				pic.dev_frame = devpool->Alloc(CPU_NV12_CALC(avf->width, avf->height));
 				pic.dev_pitch = CPU_WIDTH_ALIGN(avf->width);
 
 				int ret = 0;
-				ret = cuMemcpyHtoD(pic.dev_frame, pic.host_frame, (avf->width * avf->height * 3) >> 1);
+				ret = cudaMemcpy(pic.dev_frame, pic.host_frame, (avf->width * avf->height * 3) >> 1, cudaMemcpyHostToDevice);
+				// ret = cuMemcpyHtoD(pic.dev_frame, pic.host_frame, (avf->width * avf->height * 3) >> 1);
+				if (ret)
+				{
+					FORMAT_FATAL("copy from host to device failed", ret);
+					return -1;
+				}
 
 				dev2host.insert(std::pair<void*, void*>((void*)pic.dev_frame, pic.host_frame));
 				avfq.pop_front();
@@ -316,7 +335,7 @@ namespace FFCodec
 			if (it == dev2host.end()) return false;
 			void *p = it->second;
 			dev2host.erase(it);
-			return (devpool.Free((unsigned char*)pic.dev_frame) && avfpool.Free(p));
+			return (devpool->Free((unsigned char*)pic.dev_frame) && avfpool.Free(p));
 		}
 
 	private:
@@ -337,7 +356,8 @@ namespace FFCodec
 		int					ret;
 		int					got_picture;
 		struct SwsContext *	img_convert_ctx;
-		DevicePool			devpool;
+		DevicePool			*devpool;
+		bool				bLocalPool;
 	};
 
 	class FFMediaSource : public BaseMediaSource

@@ -22,14 +22,14 @@ namespace NvCodec
 		unsigned int		w;			/* width */
 		unsigned int		h;			/* height */
 		unsigned int		dev_pitch;	/* device frame width pitch */
-		CUdeviceptr			dev_frame;	/* device frame buffer */
+		void*				dev_frame;	/* device frame buffer */
 		unsigned int		host_pitch;	/* host frame width pitch */
 		unsigned char*		host_frame;	/* host frame buffer */
 		unsigned long long	timestamp;	/* timestamp */
 
 		CuFrame() {}
-		CuFrame(CUdeviceptr _f) { dev_frame = _f; host_frame = NULL; }
-		CuFrame(unsigned int _w, unsigned int _h, unsigned int _pitch, CUdeviceptr _f, unsigned long long _t)
+		CuFrame(void* _f) { dev_frame = _f; host_frame = NULL; }
+		CuFrame(unsigned int _w, unsigned int _h, unsigned int _pitch, void* _f, unsigned long long _t)
 		{
 			w = _w;
 			h = _h;

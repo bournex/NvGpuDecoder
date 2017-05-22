@@ -23,6 +23,7 @@
 #include "CircleBatch.h"
 #include "DedicatedPool.h"
 #include "SmartFrame.h"
+#include "FFCodec.h"
 
 using namespace boost;
 
@@ -83,6 +84,11 @@ public:
 		return false;
 	}
 
+	inline unsigned long long Timestamp()
+	{
+		return timestamp;
+	}
+
 	inline void add_ref(ISmartFrame * sf)
 	{
 		SmartFrame *ptr = static_cast<SmartFrame*>(sf);
@@ -105,6 +111,9 @@ public:
 	volatile unsigned int	step;
 	volatile unsigned int	height;
 	volatile unsigned int	tid;
+	volatile unsigned long long timestamp;
+
+	BaseCodec*		decoder;
 
 	volatile unsigned int	batchidx;		/* identify batch sequence */
 
@@ -117,7 +126,7 @@ private:
 class IFrameRestore
 {
 public:
-	virtual void Return(void *dev_ptr) = 0;
+	virtual void Return(SmartFrame *sf) = 0;
 };
 
 
@@ -165,7 +174,7 @@ public:
 		/**
 		* Description: remove bind to thumbnail buffer
 		*/
-		pres->Return((void*)sf->NV12());
+		pres->Return((SmartFrame*)sf);
 		boost::lock_guard<boost::recursive_mutex> lock(mtx);
 		freefrms.push_back(sf);
 		busyfrms.erase(sf);
@@ -241,7 +250,7 @@ private:
 	/**
 	* Description: raw ISmartFrame object pool
 	*/
-	boost::recursive_mutex							mtx;		/* pool lock */
+	boost::recursive_mutex					mtx;		/* pool lock */
 	unsigned int							totalsize;	/* pool max size */
 	std::vector<ISmartFrame*>				freefrms;	/* unused frames */
 	std::map<ISmartFrame*, unsigned int>	busyfrms;	/* save thread tid which correspond with same decoder */
@@ -257,18 +266,17 @@ class FrameBatchPipe : public IFrameRestore
 public:
 	FrameBatchPipe(FrameBatchRoutine	fbroutine/* frame batch ready callback */,
 		void *				invk = 0			/* invoker pointer */,
-		const unsigned int	batch_size = 8		/* batch init size, equal to or more than threads */,
-		const unsigned int	batch_cnt = 8		/* batch init count, equal to or less than decode queue len */,
+		const unsigned int	batch_size = 4		/* batch init size, equal to or more than threads */,
 		const unsigned int	time_out = 40		/* millisecond */)
 
-		:fbcb(fbroutine), invoker(invk), sfpool(0), batchpipe(OnBatchPop, this, batch_size, batch_cnt)
+		:fbcb(fbroutine), invoker(invk), sfpool(0), batchpipe(OnBatchPop, this, batch_size), decdevpool(0)
 	{
 		FORMAT_DEBUG(__FUNCTION__, __LINE__, "constructing FrameBatchPipe");
 		BOOST_ASSERT(fbroutine);
 
 		timeout = min(max(time_out, 1), 50);		/* [1,50]	*/
 
-		sfpool = new SmartFramePool(this, batch_size * batch_cnt);
+		sfpool = new SmartFramePool(this, batch_size * 4);
 		if (!sfpool)
 		{
 			throw("create smart frame pool failed");
@@ -309,19 +317,32 @@ public:
 		}
 	}
 
-	inline int InputFrame(PCC_Frame *frame, unsigned int tid)
+	int Startup(std::string &srcvideo)
+	{
+		// [TODO] increace pool size
+		decdevpool.dilation(4);
+
+		BOOST_ASSERT(srcvideo.length());
+		boost::thread * t = new boost::thread(boost::bind(&FrameBatchPipe::Worker, this, boost::filesystem::path(srcvideo)));
+		BOOST_ASSERT(t);
+
+		tid2parser.insert(std::pair<boost::thread::id, boost::thread*>(t->get_id(), t));
+		return 0;
+	}
+
+	inline int InputFrame(PCC_Frame *frame, unsigned int tid, BaseCodec* decoder)
 	{
 		return InputFrame((unsigned char *)frame->imageGPU,
-			frame->width, frame->height, frame->stepGPU[0], tid);
+			frame->width, frame->height, frame->stepGPU[0], frame->timeStamp, tid, decoder);
 	}
 
-	inline int InputFrame(NvCodec::CuFrame &frame, unsigned int tid)
+	inline int InputFrame(NvCodec::CuFrame &frame, unsigned int tid, BaseCodec* decoder)
 	{
 		return InputFrame((unsigned char *)frame.dev_frame,
-			frame.w, frame.h, frame.dev_pitch, tid);
+			frame.w, frame.h, frame.dev_pitch, frame.timestamp, tid, decoder);
 	}
 
-	int InputFrame(unsigned char *imageGpu, unsigned int w, unsigned int h, unsigned int s, unsigned int tid)
+	int InputFrame(unsigned char *imageGpu, unsigned int w, unsigned int h, unsigned int s, unsigned long long t, unsigned int tid, BaseCodec* decoder)
 	{
 		/**
 		* Description: convert PCC_Frame to SmartFrame
@@ -349,6 +370,8 @@ public:
 			static_cast<SmartFrame*>(frame.get())->step = s;
 			static_cast<SmartFrame*>(frame.get())->height = h;
 			static_cast<SmartFrame*>(frame.get())->width = w;
+			static_cast<SmartFrame*>(frame.get())->decoder = decoder;
+			static_cast<SmartFrame*>(frame.get())->timestamp = t;
 
 			batchpipe.push(frame);
 		}
@@ -356,15 +379,14 @@ public:
 		return 0;
 	}
 
-	void Return(void *dev_ptr)
+	inline void Return(SmartFrame *sf)
 	{
-		boost::lock_guard<boost::recursive_mutex> lk(mtx);
-		freedevs.push_back(dev_ptr);
+		sf->decoder->PutFrame(NvCodec::CuFrame(sf->NV12()));
 	}
 
 private:
 
-	void TimerRoutine()
+	inline void TimerRoutine()
 	{
 		boost::asio::io_service iosrv; /* io_service object */
 
@@ -375,25 +397,16 @@ private:
 		deadline->async_wait(boost::bind(&FrameBatchPipe::PushPipeTimer, this));
 	}
 
-	friend void OnBatchPop(ISmartFramePtr *p, unsigned int nlen, void *user)
+	friend inline void OnBatchPop(ISmartFramePtr *p, unsigned int nlen, void *user)
 	{
 		((FrameBatchPipe*)user)->BatchPop(p, nlen);
 	}
 
-	void BatchPop(ISmartFramePtr *p, unsigned int nlen)
+	inline void BatchPop(ISmartFramePtr *p, unsigned int nlen)
 	{
 		if (fbcb)
 		{
-			boost::lock_guard<boost::recursive_mutex> lk(mtx);
-			if (freedevs.size())
-			{
-				fbcb(p, nlen, &freedevs[0], freedevs.size(), invoker);
-				freedevs.clear();
-			}
-			else
-			{
-				fbcb(p, nlen, NULL, 0, invoker);
-			}
+			fbcb(p, nlen, invoker);
 		}
 	}
 
@@ -411,6 +424,59 @@ private:
 		batchpipe.push();
 	}
 
+	void Worker(boost::filesystem::path p)
+	{
+		/**
+		* Description: create media source & decoder
+		*/
+		BaseCodec*			decoder(NULL);
+		BaseMediaSource*	media(NULL);
+
+		unsigned int tid = GetCurrentThreadId();
+
+		if (p.extension() == boost::filesystem::path(".h264"))
+		{
+			/**
+			* Description: raw h264 file
+			*/
+			NvCodec::NvCodecInit();
+			decoder = new NvCodec::NvDecoder(0, 4, &decdevpool);
+			media	= new NvCodec::NvMediaSource(p.string(), decoder);
+		}
+		else if (p.extension() == boost::filesystem::path(".mbf"))
+		{
+			/**
+			* Description: mbf file [TODO]
+			*/
+		}
+		else
+		{
+			/**
+			* Description: unrecognized format
+			*/
+			FFCodec::FFInit();
+			decoder = new FFCodec::FFMpegCodec(&decdevpool);
+			media	= new FFCodec::FFMediaSource(p.string(), decoder);
+		}
+
+		NvCodec::CuFrame frame;
+
+		while (!media->Eof())
+		{
+			if (decoder->GetFrame(frame))
+			{
+				boost::this_thread::sleep(boost::posix_time::microseconds(1500));
+			}
+			else
+			{
+				/**
+				* Description: process the nv12 frame
+				*/
+				InputFrame(frame, tid, decoder);
+			}
+		}
+	}
+
 	typedef circle_batch<ISmartFramePtr> circle_batch_pipe;
 
 private:
@@ -421,8 +487,9 @@ private:
 	SmartPoolInterface *				sfpool;			/* smart frame pool */
 	FrameBatchRoutine					fbcb;			/* frame batch ready callback */
 	void *								invoker;		/* callback pointer */
-	boost::recursive_mutex						mtx;			/* lock for free device buffer vector */
-	vector<void*>						freedevs;		/* returned device pointers */
+	boost::recursive_mutex				mtx;			/* lock for free device buffer vector */
+	DevicePool							decdevpool;		
+	std::map<boost::thread::id, boost::thread *>	tid2parser;		/* decoding threads, tid to obj */
 
 #if (__cplusplus >= 201103L)
 	static thread_local unsigned int			fidx;	/* current thread frame index */
