@@ -29,7 +29,7 @@ namespace NvCodec
 	/**
 	 * Description: this pair of function should be call before/after any NvCodec code
 	 */
-	int NvCodecInit()
+	int NvCodecInit(int devno, CUcontext &cudactx)
 	{
 		int ret = 0;
 
@@ -39,12 +39,24 @@ namespace NvCodec
 			return ret;
 		}
 
+		if (ret = cuCtxCreate(&cudactx, 0, devno))
+		{
+			FORMAT_FATAL("create context failed", ret);
+			return ret;
+		}
+
 		return 0;
 	}
 
-	int NvCodecUninit()
+	int NvCodecUninit(CUcontext cudactx)
 	{
-		/* nothing todo right now */
+		if (cudactx)
+		{
+			/**
+			 * Description: if outer created context , do not destroy
+			 */
+		}
+
 		return 0;
 	}
 
@@ -67,8 +79,9 @@ namespace NvCodec
 		/**
 		* Description: 
 		*/
-		NvDecoder(unsigned int devidx = 0, unsigned int queuelen = 8, DevicePool* devpool = NULL, bool map2host = false)
-			: cuCtxLock(NULL)
+		NvDecoder(unsigned int devidx = 0, unsigned int queuelen = 8, void *cudactx = NULL, DevicePool* devpool = NULL, bool map2host = false)
+			: cuCtx((CUcontext)cudactx)
+			, cuCtxLock(NULL)
 			, cuParser(NULL)
 			, cuDecoder(NULL)
 			, dev(devidx)
@@ -90,14 +103,27 @@ namespace NvCodec
 
 			if (!devicepool)
 			{
-				devicepool = new DevicePool((qlen*3)>>1);
+				devicepool = new DevicePool(qlen);
 			}
 
-			if (!cuCtx)
+			ctxcreatelock.lock();
+			CUcontext ctxOld = NULL;
+			cuCtxPopCurrent(&ctxOld);
+
+			if (!ctxOld)
 			{
-				if (ret = cuCtxCreate(&cuCtx, 0, dev))
+				if (!cuCtx)
 				{
-					FORMAT_FATAL("create context failed", ret);
+					if (ret = cuCtxCreate(&cuCtx, 0, dev))
+					{
+						FORMAT_FATAL("create context failed", ret);
+						return ret;
+					}
+				}
+
+				if ((ret = cuCtxPushCurrent(cuCtx)) != 0)
+				{
+					FORMAT_FATAL("push context failed", ret);
 					return ret;
 				}
 			}
@@ -105,8 +131,10 @@ namespace NvCodec
 			if (!cuCtxLock && (ret = cuvidCtxLockCreate(&cuCtxLock, cuCtx)))
 			{
 				FORMAT_FATAL("create context lock failed", ret);
+				ctxcreatelock.unlock();
 				return ret;
 			}
+			ctxcreatelock.unlock();
 
 			/**
 			* Description: create video parser
@@ -496,7 +524,8 @@ namespace NvCodec
 		 * Description: cuda objects
 		 */
 		int				dev;
-		static CUcontext cuCtx;		/* context handle */
+		static boost::mutex ctxcreatelock;		/* context handle */
+		CUcontext		cuCtx;		/* context handle */
 		CUvideoctxlock	cuCtxLock;	/* context lock */
 		CUvideoparser	cuParser;	/* video parser handle */
 		CUvideodecoder	cuDecoder;	/* video decoder handle */
@@ -522,7 +551,7 @@ namespace NvCodec
 		bool		bLocalPool;
 		DevicePool	*devicepool;	/* VRAM pool for frames */
 	};
-	CUcontext NvDecoder::cuCtx = NULL;
+	boost::mutex NvDecoder::ctxcreatelock;
 	// CUcontext __declspec(thread) NvDecoder::cuCtx = 0;
 
 	int CUDAAPI NvDecoder::HandleVideoSequenceProc(void *p, CUVIDEOFORMAT *pVideoFormat)

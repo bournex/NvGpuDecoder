@@ -136,7 +136,7 @@ public:
 class SmartFramePool : public SmartPoolInterface
 {
 public:
-	SmartFramePool(IFrameRestore* prestore, unsigned int poolsize = 2 * 8) :quit(false), totalsize(poolsize), pres(prestore)
+	SmartFramePool(IFrameRestore* prestore, unsigned int poolsize = 1024) :quit(false), totalsize(poolsize), pres(prestore)
 	{
 		BOOST_ASSERT(totalsize > 0);
 
@@ -256,32 +256,42 @@ private:
 	std::map<ISmartFrame*, unsigned int>	busyfrms;	/* save thread tid which correspond with same decoder */
 };
 
-/**
-* Description: thumbnail default resolution [TODO]
-*/
-#define BOUNDARY_SIZE (640 * 320)
-
 class FrameBatchPipe : public IFrameRestore
 {
 public:
-	FrameBatchPipe(FrameBatchRoutine	fbroutine/* frame batch ready callback */,
+	FrameBatchPipe(FrameBatchRoutine fbroutine	/* frame batch ready callback */,
 		void *				invk = 0			/* invoker pointer */,
-		const unsigned int	batch_size = 4		/* batch init size, equal to or more than threads */,
+		void *				cuctx = 0			/* cuda context handle */,
+		const unsigned int	batch_size = 1		/* batch init size, equal to or more than threads */,
 		const unsigned int	time_out = 40		/* millisecond */)
 
-		:fbcb(fbroutine), invoker(invk), sfpool(0), batchpipe(OnBatchPop, this, batch_size), decdevpool(0)
+		:fbcb(fbroutine), invoker(invk), cudactx(cuctx), sfpool(0), batchpipe(OnBatchPop, this, batch_size), decdevpool(512)
 	{
 		FORMAT_DEBUG(__FUNCTION__, __LINE__, "constructing FrameBatchPipe");
 		BOOST_ASSERT(fbroutine);
 
-		timeout = min(max(time_out, 1), 50);		/* [1,50]	*/
+		timeout = min(max(time_out, 1), 50);		/* [1,50] */
 
-		sfpool = new SmartFramePool(this, batch_size * 4);
+		if (!cudactx)
+		{
+			/**
+			 * Description: no pre-created context, init driver API environment inner
+			 */
+			NvCodec::NvCodecInit(0, (CUcontext&)cudactx);
+		}
+
+		/**
+		 * Description: create smart frame pool
+		 */
+		sfpool = new SmartFramePool(this/* default size 1024 */);
 		if (!sfpool)
 		{
 			throw("create smart frame pool failed");
 		}
 
+		/**
+		 * Description: start up force push timer thread
+		 */
 		timerthread = new boost::thread(boost::bind(&FrameBatchPipe::TimerRoutine, this));
 		if (!timerthread)
 		{
@@ -439,8 +449,7 @@ private:
 			/**
 			* Description: raw h264 file
 			*/
-			NvCodec::NvCodecInit();
-			decoder = new NvCodec::NvDecoder(0, 4, &decdevpool);
+			decoder = new NvCodec::NvDecoder(0, 4, cudactx, &decdevpool);
 			media	= new NvCodec::NvMediaSource(p.string(), decoder);
 		}
 		else if (p.extension() == boost::filesystem::path(".mbf"))
@@ -455,7 +464,7 @@ private:
 			* Description: unrecognized format
 			*/
 			FFCodec::FFInit();
-			decoder = new FFCodec::FFMpegCodec(&decdevpool);
+			decoder = new FFCodec::FFMpegCodec(&decdevpool, cudactx);
 			media	= new FFCodec::FFMediaSource(p.string(), decoder);
 		}
 
@@ -487,6 +496,7 @@ private:
 	SmartPoolInterface *				sfpool;			/* smart frame pool */
 	FrameBatchRoutine					fbcb;			/* frame batch ready callback */
 	void *								invoker;		/* callback pointer */
+	void *								cudactx;		/* cuda context */
 	boost::recursive_mutex				mtx;			/* lock for free device buffer vector */
 	DevicePool							decdevpool;		
 	std::map<boost::thread::id, boost::thread *>	tid2parser;		/* decoding threads, tid to obj */

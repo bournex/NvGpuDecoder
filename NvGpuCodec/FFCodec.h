@@ -160,7 +160,7 @@ namespace FFCodec
 			map<void*, AVFrame*>	busylist;
 		};
 
-		FFMpegCodec(DevicePool *devicepool = NULL) : cuCtx(NULL), cuCtxLock(NULL), pFrame(NULL), devpool(devicepool), bLocalPool(false)
+		FFMpegCodec(DevicePool *devicepool = NULL, void *cudactx = NULL) : cuCtx((CUcontext)cudactx), cuCtxLock(NULL), pFrame(NULL), devpool(devicepool), bLocalPool(false)
 		{
 			if (!devpool)
 			{
@@ -177,25 +177,24 @@ namespace FFCodec
 			}
 
 			int ret = 0;
-			if (ret = cuInit(0))
-			{
-				FORMAT_FATAL("create init environment failed", ret);
-				throw ret;
-			}
 
 			if (!cuCtx)
 			{
+				/*always do not create private context*/
 				if (ret = cuCtxCreate(&cuCtx, 0, 0))
 				{
 					FORMAT_FATAL("create context failed", ret);
 					throw ret;
 				}
 			}
-
-			if (!cuCtxLock && (ret = cuvidCtxLockCreate(&cuCtxLock, cuCtx)))
+			else
 			{
-				FORMAT_FATAL("create context lock failed", ret);
-				throw ret;
+				ret = cuCtxPushCurrent(cuCtx);
+				if (ret)
+				{
+					FORMAT_FATAL("push context failed", ret);
+					throw ret;
+				}
 			}
 		}
 

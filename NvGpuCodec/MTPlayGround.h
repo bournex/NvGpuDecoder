@@ -14,9 +14,10 @@ private:
 	FrameBatchPipe		batchpipe;
 
 public:
-	MtPlayGround(FrameBatchRoutine _playcb, void *_invoker)
-		: batchpipe(_playcb, _invoker, 1)
+	MtPlayGround(FrameBatchRoutine _playcb, void *_invoker, void *cuCtx)
+		: batchpipe(_playcb, _invoker, cuCtx, 4/*batch size, default 1*/)
 	{
+
 	}
 
 	int AddVideo(std::string s)
