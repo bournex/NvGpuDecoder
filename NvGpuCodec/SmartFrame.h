@@ -68,13 +68,7 @@ private:
 				'ISmartFramePtr&'£¬'ISmartFramePtr *' or keep the raw pointer 
 				returned from 'get' method. the inner reference counter will 
 				increase by 1 during object assignment copy construct, and 
-				decrease by 1 during object destruct. the NV12, BGRP and 
-				SmartFrame object will be destroyed when reference counter 
-				decrease to 0. the BGRP buffer in a single batch are continuous.
-				these are actually pointers with additional offset to the 
-				beginning of a large GPU buffer. and the large buffer won't 
-				destroy until all the ISmartFramePtrs linked to it been destroyed.
-				acquire the large buffer by calling Base() method.
+				decrease by 1 during object destruct.
  */
 typedef boost::intrusive_ptr<ISmartFrame> ISmartFramePtr;
 

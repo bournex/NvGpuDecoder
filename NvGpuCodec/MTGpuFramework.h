@@ -39,7 +39,7 @@ class SmartFrame : public ISmartFrame
 {
 public:
 	explicit SmartFrame(SmartPoolInterface *fpool)
-		:refcnt(0), sfpool(fpool)
+		:refcnt(0), sfpool(fpool), last(false)
 	{
 		BOOST_ASSERT(sfpool);
 	}
@@ -81,7 +81,7 @@ public:
 
 	inline bool LastFrame()
 	{
-		return false;
+		return last;
 	}
 
 	inline unsigned long long Timestamp()
@@ -112,6 +112,7 @@ public:
 	volatile unsigned int	height;
 	volatile unsigned int	tid;
 	volatile unsigned long long timestamp;
+	volatile bool			last;
 
 	BaseCodec*		decoder;
 
@@ -343,16 +344,16 @@ public:
 	inline int InputFrame(PCC_Frame *frame, unsigned int tid, BaseCodec* decoder)
 	{
 		return InputFrame((unsigned char *)frame->imageGPU,
-			frame->width, frame->height, frame->stepGPU[0], frame->timeStamp, tid, decoder);
+			frame->width, frame->height, frame->stepGPU[0], frame->timeStamp, tid, false /* TODO */, decoder);
 	}
 
 	inline int InputFrame(NvCodec::CuFrame &frame, unsigned int tid, BaseCodec* decoder)
 	{
 		return InputFrame((unsigned char *)frame.dev_frame,
-			frame.w, frame.h, frame.dev_pitch, frame.timestamp, tid, decoder);
+			frame.w, frame.h, frame.dev_pitch, frame.timestamp, frame.last, tid, decoder);
 	}
 
-	int InputFrame(unsigned char *imageGpu, unsigned int w, unsigned int h, unsigned int s, unsigned long long t, unsigned int tid, BaseCodec* decoder)
+	int InputFrame(unsigned char *imageGpu, unsigned int w, unsigned int h, unsigned int s, unsigned long long t, bool last, unsigned int tid, BaseCodec* decoder)
 	{
 		/**
 		* Description: convert PCC_Frame to SmartFrame
@@ -382,6 +383,7 @@ public:
 			static_cast<SmartFrame*>(frame.get())->width = w;
 			static_cast<SmartFrame*>(frame.get())->decoder = decoder;
 			static_cast<SmartFrame*>(frame.get())->timestamp = t;
+			static_cast<SmartFrame*>(frame.get())->last = last;
 
 			batchpipe.push(frame);
 		}
@@ -470,17 +472,21 @@ private:
 
 		NvCodec::CuFrame frame;
 
-		while (!media->Eof())
+		while (!frame.last)
 		{
 			if (decoder->GetFrame(frame))
 			{
-				boost::this_thread::sleep(boost::posix_time::microseconds(1500));
+				boost::this_thread::sleep(boost::posix_time::microseconds(1000));
 			}
 			else
 			{
 				/**
 				* Description: process the nv12 frame
 				*/
+				if (frame.last)
+				{
+					cout << "end of decoded frame" << endl;
+				}
 				InputFrame(frame, tid, decoder);
 			}
 		}

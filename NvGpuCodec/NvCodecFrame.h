@@ -26,10 +26,11 @@ namespace NvCodec
 		unsigned int		host_pitch;	/* host frame width pitch */
 		unsigned char*		host_frame;	/* host frame buffer */
 		unsigned long long	timestamp;	/* timestamp */
+		bool				last;		/* last frame */
 
-		CuFrame() {}
-		CuFrame(void* _f) { dev_frame = _f; host_frame = NULL; }
-		CuFrame(unsigned int _w, unsigned int _h, unsigned int _pitch, void* _f, unsigned long long _t)
+		CuFrame() : last(false) {}
+		CuFrame(void* _f) : last(false) { dev_frame = _f; host_frame = NULL; }
+		CuFrame(unsigned int _w, unsigned int _h, unsigned int _pitch, void* _f, unsigned long long _t, bool _last = false)
 		{
 			w = _w;
 			h = _h;
@@ -38,6 +39,7 @@ namespace NvCodec
 			host_pitch = CPU_WIDTH_ALIGN(_w);
 			host_frame = NULL;
 			timestamp = _t;
+			last = _last;
 		}
 	};
 }

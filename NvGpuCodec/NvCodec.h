@@ -9,6 +9,8 @@
 #include <nvcuvid.h>
 #include <string>
 #include <list>
+#include <chrono>
+using namespace std::chrono;
 
 #include "BaseCodec.h"
 #include "DedicatedPool.h"
@@ -85,6 +87,7 @@ namespace NvCodec
 			, cuParser(NULL)
 			, cuDecoder(NULL)
 			, dev(devidx)
+			, beof(FALSE)
 			, cWidth(0)
 			, cHeight(0)
 			, qlen((queuelen*3)>>1)
@@ -217,7 +220,10 @@ namespace NvCodec
 				packet.payload = pStream;
 				packet.payload_size = nSize;
 				if (!pStream || (nSize == 0))
-					packet.flags = CUVID_PKT_ENDOFSTREAM;
+				{
+					packet.flags	= CUVID_PKT_ENDOFSTREAM;
+					beof			= true;
+				}
 
 				// std::cout<<"address "<<std::setbase(16)<<pStream<<", datalen "<<nSize<<std::endl;
 				if (ret = cuvidParseVideoData(cuParser, &packet))
@@ -226,6 +232,13 @@ namespace NvCodec
 				}
 				else
 				{
+					if (beof)
+					{
+						CuFrame & lastframe = qpic.back();
+						lastframe.last = true;
+						beof = false;
+					}
+
 					return true;
 				}
 			}
@@ -244,7 +257,7 @@ namespace NvCodec
 		{
 			{
 				boost::lock_guard<boost::recursive_mutex> lk(qmtx);
-				if (qpic.size())
+				if (qpic.size() && !beof)
 				{
 					pic = qpic.front();
 					qpic.pop_front();
@@ -397,6 +410,11 @@ namespace NvCodec
 				cuDecoder = NULL;
 			}
 
+			/**
+			 * Description: reset epoch
+			 */
+			epoch = system_clock::now();
+
 			return ret ? NV_FAILED : NV_OK;
 		}
 
@@ -428,7 +446,6 @@ namespace NvCodec
 		 */
 		int HandlePictureDisplay(CUVIDPARSERDISPINFO *pDispInfo)
 		{
-
 			CUVIDPROCPARAMS videoProcessingParameters	= { 0 };
 			videoProcessingParameters.progressive_frame = pDispInfo->progressive_frame;
 			videoProcessingParameters.second_field		= 0;
@@ -458,26 +475,23 @@ namespace NvCodec
 				{
 					if (qmtx.try_lock())
 					{
-						if (qpic.size() < qlen)
+						static const system_clock::duration dn(1000 * 40);
+						int fluc = rand() % 200;
+						system_clock::duration dran(((fluc & 0x00000001) ? fluc : -fluc));
+
+						if (beof) qlen++;
+						if (qpic.size() < (qlen))
 						{
 							/* have free space */
-							void* devbuf = devicepool->Alloc((nPitch*cHeight * 3) >> 1);
+							void* devbuf = devicepool->Alloc((nPitch * cHeight * 3) >> 1);
 							BOOST_ASSERT(devbuf);
 
 							cuvidCtxLock(cuCtxLock, 0);
 							ret = cudaMemcpy((void*)devbuf, (void*)pSrc, (nPitch * cHeight * 3) >> 1, cudaMemcpyDeviceToDevice);
 							cuvidCtxUnlock(cuCtxLock, 0);
-							if (ret)
-							{
-								// FORMAT_FATAL("copy decoded frame failed", ret);
-								// printf("0x%08x --- FAIL\n", devbuf);
-							}
-							else
-							{
-								// printf("0x%08x --- SUCCESS\n", devbuf);
-							}
 
-							qpic.push_back(CuFrame(cWidth, cHeight, nPitch, devbuf, pDispInfo->timestamp));
+							qpic.push_back(CuFrame(cWidth, cHeight, nPitch, devbuf, (epoch + dn + dran).time_since_epoch().count()));
+							epoch += (dn + dran);
 							qmtx.unlock();
 							break;
 						}
@@ -542,14 +556,16 @@ namespace NvCodec
 		boost::recursive_mutex		qmtx;
 		unsigned int				qlen;		/* cached for decoded queue length */
 		std::list<CuFrame>			qpic;		/* cached for decoded nv12 data */
+		boost::atomic_bool			beof;		/* end of video frame */
 
 		/**
 		 * Description: host memory management 
 		 */
 		bool		bMap2Host;
-		HostPool	framepool;	/* RAM pool for frames */
+		HostPool	framepool;		/* RAM pool for frames */
 		bool		bLocalPool;
 		DevicePool	*devicepool;	/* VRAM pool for frames */
+		system_clock::time_point epoch;
 	};
 	boost::mutex NvDecoder::ctxcreatelock;
 	// CUcontext __declspec(thread) NvDecoder::cuCtx = 0;
