@@ -52,6 +52,8 @@ public:
 	virtual unsigned int		Tid()					= 0;	/* get which thread this frame belong to */
 	virtual bool				LastFrame()				= 0;	/* is last frame, always return false if dealing online video */
 
+	virtual unsigned int		GetRef()const 			= 0;	/* get reference count of smart frame, for debug */
+
 	virtual ~ISmartFrame() {};
 protected:
 	friend void intrusive_ptr_add_ref(ISmartFrame * sf) { sf->add_ref(sf); }

@@ -23,7 +23,7 @@ public:
 
 	~circle_batch() {}
 
-	void push(T &t)
+	bool push(T &t)
 	{
 		/**
 		* Description: push to circle batch queue
@@ -47,7 +47,6 @@ public:
 #if (__cplusplus >= 201103L)
 		static thread_local vector<T> _swap(_batch_size);
 #else
-		static vector<T> _swap;
 		if (_swap.capacity() == 0)
 			_swap.resize(_batch_size);
 #endif
@@ -65,15 +64,20 @@ public:
 
 			_mtx.unlock();
 
-			if (_bcb)
-			{
-				_bcb(&_swap[0], _batch_size, _cbv);
-				_swap.clear();
-				_swap.resize(_batch_size);
-			}
-			return;
+			return true;
 		}
 		_mtx.unlock();
+		return false;
+	}
+
+	inline void push_swap()
+	{
+		if (_bcb)
+		{
+			_bcb(&_swap[0], _batch_size, _cbv);
+			_swap.clear();
+			_swap.resize(_batch_size);
+		}
 	}
 
 	/**
@@ -86,7 +90,7 @@ public:
 #if (__cplusplus >= 201103L)
 		static thread_local vector<T> _swap(_batch_size);
 #else
-		static vector<T> _swap(_batch_size);
+		// static vector<T> _swap(_batch_size);
 		if (_swap.capacity() == 0)
 			_swap.resize(_batch_size);
 #endif
@@ -155,6 +159,7 @@ public:
 
 private:
 	vector<T>		_q;				/* batch queue */
+	vector<T>		_swap;			/* swap batch */
 	std::mutex		_mtx;			/* lock for queue batch pipe */
 	std::mutex		_mtxswap;		/* lock for swap batch */
 	batchcb			_bcb;			/* user callback */
