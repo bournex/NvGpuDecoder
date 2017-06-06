@@ -18,6 +18,7 @@
 #include <boost/bind.hpp>
 #include <boost/asio.hpp>
 #include <boost/scoped_ptr.hpp>
+#include <boost/lexical_cast.hpp>
 #include <algorithm>
 
 #include "CircleBatch.h"
@@ -87,6 +88,16 @@ public:
 	inline unsigned long long Timestamp()
 	{
 		return timestamp;
+	}
+
+	inline unsigned int GetRef() const
+	{
+		unsigned int nnn = this->refcnt.load();
+		if (nnn == 3)
+		{
+			printf("haa\n");
+		}
+		return this->refcnt.load();
 	}
 
 	inline void add_ref(ISmartFrame * sf)
@@ -360,32 +371,40 @@ public:
 		input SmartFrame to batch pipe
 		if reach one batch is full, push batch
 		*/
-		ISmartFramePtr frame(sfpool->Get(tid));
-
-		if (!frame)
+		bool bpush = false;
 		{
-			/**
-			* Description: no frame
-			*/
-			FORMAT_DEBUG(__FUNCTION__, __LINE__, "get frame failed");
-			return -1;
+			ISmartFramePtr frame(sfpool->Get(tid));
+
+			if (!frame)
+			{
+				/**
+				 * Description: no frame
+				 */
+				FORMAT_DEBUG(__FUNCTION__, __LINE__, "get frame failed");
+				return -1;
+			}
+			else
+			{
+				/**
+				 * Description: initialize smart frame
+				 */
+				static_cast<SmartFrame*>(frame.get())->origindata = imageGpu;
+				static_cast<SmartFrame*>(frame.get())->frameno = fidx++;
+				static_cast<SmartFrame*>(frame.get())->tid = tid;
+				static_cast<SmartFrame*>(frame.get())->step = s;
+				static_cast<SmartFrame*>(frame.get())->height = h;
+				static_cast<SmartFrame*>(frame.get())->width = w;
+				static_cast<SmartFrame*>(frame.get())->decoder = decoder;
+				static_cast<SmartFrame*>(frame.get())->timestamp = t;
+				static_cast<SmartFrame*>(frame.get())->last = last;
+
+				bpush = batchpipe.push(frame);
+			}
 		}
-		else
-		{
-			/**
-			* Description: initialize smart frame
-			*/
-			static_cast<SmartFrame*>(frame.get())->origindata = imageGpu;
-			static_cast<SmartFrame*>(frame.get())->frameno = fidx++;
-			static_cast<SmartFrame*>(frame.get())->tid = tid;
-			static_cast<SmartFrame*>(frame.get())->step = s;
-			static_cast<SmartFrame*>(frame.get())->height = h;
-			static_cast<SmartFrame*>(frame.get())->width = w;
-			static_cast<SmartFrame*>(frame.get())->decoder = decoder;
-			static_cast<SmartFrame*>(frame.get())->timestamp = t;
-			static_cast<SmartFrame*>(frame.get())->last = last;
 
-			batchpipe.push(frame);
+		if (bpush)
+		{
+			batchpipe.push_swap();
 		}
 
 		return 0;
@@ -433,7 +452,7 @@ private:
 		/**
 		* Description: do push
 		*/
-		batchpipe.push();
+		// batchpipe.push();
 	}
 
 	void Worker(boost::filesystem::path p)
