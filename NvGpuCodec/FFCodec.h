@@ -272,6 +272,7 @@ namespace FFCodec
 				 * Description: alloc decode frame pointer
 				 */
 				pFrame = av_frame_alloc();
+				BOOST_ASSERT(pFrame);
 			}
 
 			/**
@@ -292,7 +293,6 @@ namespace FFCodec
 			boost::lock_guard<boost::recursive_mutex> lk(mtx);
 			avfq.push_back(avf);
 			
-
 			return true;
 		}
 
@@ -306,8 +306,14 @@ namespace FFCodec
 				AVFrame *avf = avfq.front();
 				AVFRAME2CUFRAME(pic, avf);
 
-				pic.dev_frame = devpool->Alloc(CPU_NV12_CALC(avf->width, avf->height));
 				pic.dev_pitch = CPU_WIDTH_ALIGN(avf->width);
+				pic.dev_frame = devpool->Alloc(CPU_NV12_CALC(avf->width, avf->height));
+
+				if (pic.dev_frame == NULL)
+				{
+					/* alloc device frame failed */
+					return -1;
+				}
 
 				int ret = 0;
 				ret = cudaMemcpy(pic.dev_frame, pic.host_frame, (avf->width * avf->height * 3) >> 1, cudaMemcpyHostToDevice);

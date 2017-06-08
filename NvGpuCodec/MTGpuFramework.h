@@ -275,9 +275,10 @@ public:
 		void *				invk = 0			/* invoker pointer */,
 		void *				cuctx = 0			/* cuda context handle */,
 		const unsigned int	batch_size = 1		/* batch init size, equal to or more than threads */,
-		const unsigned int	time_out = 40		/* millisecond */)
+		const unsigned int	time_out = 40		/* millisecond */,
+		bool				loop = false)
 
-		:fbcb(fbroutine), invoker(invk), cudactx(cuctx), sfpool(0), batchpipe(OnBatchPop, this, batch_size), decdevpool(512)
+		:fbcb(fbroutine), invoker(invk), cudactx(cuctx), sfpool(0), batchpipe(OnBatchPop, this, batch_size), decdevpool(512), looplay(loop)
 	{
 		FORMAT_DEBUG(__FUNCTION__, __LINE__, "constructing FrameBatchPipe");
 		BOOST_ASSERT(fbroutine);
@@ -471,7 +472,7 @@ private:
 			* Description: raw h264 file
 			*/
 			decoder = new NvCodec::NvDecoder(0, 4, cudactx, &decdevpool);
-			media	= new NvCodec::NvMediaSource(p.string(), decoder);
+			media	= new NvCodec::NvMediaSource(p.string(), decoder, looplay);
 		}
 		else if (p.extension() == boost::filesystem::path(".mbf"))
 		{
@@ -522,6 +523,7 @@ private:
 	FrameBatchRoutine					fbcb;			/* frame batch ready callback */
 	void *								invoker;		/* callback pointer */
 	void *								cudactx;		/* cuda context */
+	bool								looplay;		/* loop play */
 	boost::recursive_mutex				mtx;			/* lock for free device buffer vector */
 	DevicePool							decdevpool;		
 	std::map<boost::thread::id, boost::thread *>	tid2parser;		/* decoding threads, tid to obj */

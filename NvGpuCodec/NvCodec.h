@@ -590,8 +590,8 @@ namespace NvCodec
 	public:
 		typedef void(*MediaSrcDataCallback)(unsigned char *data, unsigned int len, void *p);
 
-		NvMediaSource(std::string srcvideo, MediaSrcDataCallback msdcb, void*user)
-			: reader(NULL), eomf(false), BaseMediaSource(srcvideo, msdcb, user)
+		NvMediaSource(std::string srcvideo, MediaSrcDataCallback msdcb, void*user, bool loop)
+			: reader(NULL), eomf(false), BaseMediaSource(srcvideo, msdcb, user, loop)
 		{
 			BOOST_ASSERT(msdcb);
 
@@ -600,8 +600,8 @@ namespace NvCodec
 			BOOST_ASSERT(reader);
 		}
 
-		NvMediaSource(std::string srcvideo, BaseCodec *dec)
-			: reader(NULL), eomf(false), BaseMediaSource(srcvideo, dec)
+		NvMediaSource(std::string srcvideo, BaseCodec *dec, bool loop)
+			: reader(NULL), eomf(false), BaseMediaSource(srcvideo, dec, loop)
 		{
 			reader = new boost::thread(boost::bind(&NvMediaSource::MediaReader, this, srcvideo));
 
@@ -642,6 +642,11 @@ namespace NvCodec
 				do
 				{
 					unsigned int readed = fread(cachedata, 1, cachelen, p);
+
+					if (feof(p) && loop)
+					{
+						fseek(p, 0L, SEEK_SET);
+					}
 
 					if (datacb)
 					{

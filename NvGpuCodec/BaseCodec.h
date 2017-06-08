@@ -40,14 +40,14 @@ class BaseMediaSource
 public:
 	typedef void(*MediaSrcDataCallback)(unsigned char *data, unsigned int len, void *p);
 
-	BaseMediaSource(std::string srcvideo, MediaSrcDataCallback msdcb, void*user, unsigned int cachesize = 1024)
-		: src(srcvideo), datacb(msdcb), cbpointer(user), decoder(NULL)
+	BaseMediaSource(std::string srcvideo, MediaSrcDataCallback msdcb, void*user, bool looplay = false, unsigned int cachesize = 1024)
+		: src(srcvideo), datacb(msdcb), cbpointer(user), decoder(NULL), loop(looplay)
 	{
 		/* add base class code here */
 	}
 
-	BaseMediaSource(std::string srcvideo, BaseCodec *dec, unsigned int cachesize = 1024)
-		: src(srcvideo), decoder(dec), datacb(NULL)
+	BaseMediaSource(std::string srcvideo, BaseCodec *dec, bool looplay = false, unsigned int cachesize = 1024)
+		: src(srcvideo), decoder(dec), datacb(NULL), loop(looplay)
 	{
 		/* add base class code here */
 	}
@@ -67,4 +67,5 @@ protected:
 	void *					cbpointer;	/* user callback variable */
 	MediaSrcDataCallback	datacb;		/* user callback */
 	string					src;		/* video source name */
+	bool					loop;		/* loop play */
 };

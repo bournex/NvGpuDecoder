@@ -21,8 +21,8 @@ void OnBatchData(ISmartFramePtr *batch, unsigned int len, void *invoker)
 	//cout << "batch index : " << idx++ << endl;
 	for (int i = 0; i < len; i++)
 	{
+		cout << batch[i]->Tid() << ", frame no = " << batch[i]->FrameNo() << ", time = " << batch[i]->Timestamp() << ", ref count" << batch[i]->GetRef() << endl;
 		ISmartFramePtr frame(batch[i]);
-		cout << batch[i]->Tid() << ", time = " << batch[i]->Timestamp() << endl;
 	}
 }
 
@@ -34,7 +34,11 @@ int main(int argc, char **argv)
 
 	cout << "start up argument " << argc << endl;
 
-	MtPlayGround mvs(OnBatchData, NULL);
+	CUcontext ctx;
+	cuInit(0);
+	cuCtxCreate(&ctx, 0, 0);
+
+	MtPlayGround mvs(OnBatchData, NULL, ctx, true/*loop*/);
 	for (int i = 1; i < argc; i++)
 	{
 		mvs.AddVideo(argv[i]);

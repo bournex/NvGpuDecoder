@@ -62,8 +62,6 @@ public:
 
 			_bidx = (++_bidx == _batch_cnt) ? 0 : _bidx;
 
-			_mtx.unlock();
-
 			return true;
 		}
 		_mtx.unlock();
@@ -78,6 +76,7 @@ public:
 			_swap.clear();
 			_swap.resize(_batch_size);
 		}
+		_mtx.unlock();
 	}
 
 	/**
