@@ -8,7 +8,6 @@
 #include "NvCodec.h"
 #include "MTGpuFramework.h"
 #include "MTPlayGround.h"
-#include "BatchPipeline.h"
 
 /* pipeline simulation or only decoding */
 #define PIPELINE_SIMULATE_FRAMEWORK

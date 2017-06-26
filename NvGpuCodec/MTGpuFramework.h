@@ -268,6 +268,7 @@ private:
 	std::map<ISmartFrame*, unsigned int>	busyfrms;	/* save thread tid which correspond with same decoder */
 };
 
+
 class FrameBatchPipe : public IFrameRestore
 {
 public:
@@ -283,7 +284,7 @@ public:
 		FORMAT_DEBUG(__FUNCTION__, __LINE__, "constructing FrameBatchPipe");
 		BOOST_ASSERT(fbroutine);
 
-		timeout = min(max(time_out, 1), 50);		/* [1,50] */
+		timeout = min(max((int)time_out, 1), 50);		/* [1,50] */
 
 		if (!cudactx)
 		{
@@ -413,7 +414,8 @@ public:
 
 	inline void Return(SmartFrame *sf)
 	{
-		sf->decoder->PutFrame(NvCodec::CuFrame(sf->NV12()));
+		NvCodec::CuFrame cuf((void*)sf->NV12());
+		sf->decoder->PutFrame(cuf);
 	}
 
 private:
@@ -429,7 +431,7 @@ private:
 		deadline->async_wait(boost::bind(&FrameBatchPipe::PushPipeTimer, this));
 	}
 
-	friend inline void OnBatchPop(ISmartFramePtr *p, unsigned int nlen, void *user)
+	static inline void OnBatchPop(ISmartFramePtr *p, unsigned int nlen, void *user)
 	{
 		((FrameBatchPipe*)user)->BatchPop(p, nlen);
 	}
@@ -464,7 +466,9 @@ private:
 		BaseCodec*			decoder(NULL);
 		BaseMediaSource*	media(NULL);
 
-		unsigned int tid = GetCurrentThreadId();
+		std::string threadId = boost::lexical_cast<std::string>(boost::this_thread::get_id());
+    		unsigned long tid = 0;
+    		sscanf(threadId.c_str(), "%lx", &tid);
 
 		if (p.extension() == boost::filesystem::path(".h264"))
 		{

@@ -87,7 +87,7 @@ namespace NvCodec
 			, cuParser(NULL)
 			, cuDecoder(NULL)
 			, dev(devidx)
-			, beof(FALSE)
+			, beof(0)
 			, cWidth(0)
 			, cHeight(0)
 			, qlen((queuelen*3)>>1)

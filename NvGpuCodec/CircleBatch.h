@@ -42,19 +42,12 @@ public:
 		/*	overflow push	timed push							*/
 
 		_q[_widx++] = t;
-		_widx = (_widx == _batch_size * _batch_cnt) ? 0 : _widx;
+		_widx = (_widx == _batch_size * _batch_cnt) ? 0 : _widx; 
 
-#if (__cplusplus >= 201103L)
-		static thread_local vector<T> _swap(_batch_size);
-#else
 		if (_swap.capacity() == 0)
 			_swap.resize(_batch_size);
-#endif
 
-		if ((_widx < (_bidx * _batch_size)) || (_widx >= (_bidx * _batch_size + _batch_size)))
-		{
-			/* out of current batch boundary */
-			std::lock_guard<std::mutex> lk(_mtxswap);
+		if ((_widx < (_bidx * _batch_size)) || (_widx >= (_bidx * _batch_size + _batch_size))) { /* out of current batch boundary */ std::lock_guard<std::mutex> lk(_mtxswap);
 			std::swap_ranges(
 				_q.begin() + (_bidx * _batch_size),
 				_q.begin() + (_bidx * _batch_size + _batch_size),

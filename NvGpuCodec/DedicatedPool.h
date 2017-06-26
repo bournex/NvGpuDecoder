@@ -138,7 +138,7 @@ private:
 	boost::recursive_mutex	lmtx;
 
 public:
-	explicit DedicatedPool(unsigned int len = 32) : poolsize(len)
+	DedicatedPool(unsigned int len = 32) : poolsize(len)
 	{
 		if (len > PoolMax || len < PoolMin)
 			FORMAT_WARNING("pool size is out of range [2, 32768]", len);
@@ -193,7 +193,7 @@ public:
 			 */
 			if (lmtx.try_lock())
 			{
-				for (std::list<FreeOnes>::iterator it = freelist.begin();
+				for (typename std::list<FreeOnes>::iterator it = freelist.begin();
 					it != freelist.end();
 					it++)
 				{
@@ -228,7 +228,7 @@ public:
 						/**
 						* Description: no suitable free buffer, realloc the biggest one
 						*/
-						std::list<FreeOnes>::reverse_iterator it = freelist.rbegin();
+						typename std::list<FreeOnes>::reverse_iterator it = freelist.rbegin();
 						buf = (unsigned char*)FrameAllocator::Realloc((unsigned char*)it->buf, len);
 
 						BOOST_ASSERT(buf);
@@ -290,8 +290,8 @@ public:
 		return poolsize += addition;
 	}
 
-	boost::atomic_uint32_t aidx = 0;
-	boost::atomic_uint32_t fidx = 0;
+	//boost::atomic_uint32_t aidx = 0;
+	//boost::atomic_uint32_t fidx = 0;
 };
 
 typedef DedicatedPool<CpuAllocator>		HostPool;
