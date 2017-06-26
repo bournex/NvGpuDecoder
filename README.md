@@ -3,6 +3,7 @@
 Make sure you have 
 - CUDA toolkit 7.5 or later
 - boost 1.59 or later  
+- ffmpeg
 
 installed.
 
@@ -17,4 +18,5 @@ Currently NvDecoder and NvMediaSource have implemented. you can rewrite this cla
   
 FrameBatchPipe is a batch video frame process framework, which is similar to NVidia Deepstream deep learning framework.
 
-sample have tested on Tesla M4/M40/K40/P4 cards
+sample have tested on Tesla M4/M40/K40/P4 cards  
+sample have tested on CentOS7.2/Win10
