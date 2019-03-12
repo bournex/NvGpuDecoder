@@ -1,13 +1,3 @@
-/**
-*                                Netposa Video Cloud
-*                         (c) Copyright 2011-2017, Netposa
-*                                All Rights Reserved
-*
-* File		: MTGpuFramework.h
-* Author	: Liu Xuefei
-* Time		: 2017-5-5
-*/
-
 #pragma once
 
 #include <thread>
